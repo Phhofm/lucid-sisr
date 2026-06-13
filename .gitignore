@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# Model weights (downloaded to cache)
+.cache/
+lucid_output/
+*.pth
+*.pt
+*.onnx
+
+# LUCID workspace (generated during processing)
+lucid_workspace_*/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+**/.DS_Store
+**/Thumbs.db
+
+# Logs
+*.log
+
+# Session data
+.kilo/
+
+# Static analysis artifacts
+.scannerwork/
+reports/*.txt
+reports/*.json
+reports/*.sarif
+sonar.json
+# But keep the human-readable docs that are part of the repo's own audit trail
+!reports/*.md

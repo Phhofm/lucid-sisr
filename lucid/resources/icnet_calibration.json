@@ -1,0 +1,54 @@
+{
+  "calibration_version": "1.0.0",
+  "calibrated_on": "7 images, 42 paired observations per size",
+  "calibrated_date": "2026-06-02",
+  "reference_size": 512,
+  "models": {
+    "512": {
+      "raw_to_calibrated": {
+        "type": "identity"
+      },
+      "suggested_threshold": 0.45,
+      "r_squared": 1.0,
+      "max_abs_error": 0.0,
+      "n_observations": 42,
+      "notes": "Native training size; default and reference"
+    },
+    "128": {
+      "raw_to_calibrated": {
+        "type": "linear",
+        "a": 1.6033803672963909,
+        "b": -0.3073602157209531
+      },
+      "suggested_threshold": 0.47235218240697857,
+      "r_squared": 0.9366290423081891,
+      "max_abs_error": 0.0874148978908551,
+      "n_observations": 42,
+      "notes": "Smallest supported; for 4x SR with 128 patch size. Drift expected; linear may be loose."
+    },
+    "256": {
+      "raw_to_calibrated": {
+        "type": "linear",
+        "a": 1.1695950840455809,
+        "b": -0.07554437467402356
+      },
+      "suggested_threshold": 0.44933873427048565,
+      "r_squared": 0.9862803061084852,
+      "max_abs_error": 0.048393650783363246,
+      "n_observations": 42,
+      "notes": "Standard 2x SR LR size; ImageNet / face / icon data."
+    },
+    "1024": {
+      "raw_to_calibrated": {
+        "type": "linear",
+        "a": 0.9292774641902388,
+        "b": 0.03162694550472728
+      },
+      "suggested_threshold": 0.45021327925975047,
+      "r_squared": 0.9932308473616878,
+      "max_abs_error": 0.04031692227200956,
+      "n_observations": 42,
+      "notes": "Largest supported; high-res scans. Context branch at native 512 so drift is small."
+    }
+  }
+}

@@ -1,0 +1,16 @@
+numpy>=1.24
+opencv-python>=4.8
+pillow>=10.0
+platformdirs>=3.0
+psutil>=5.9
+torch>=2.0
+torchvision>=0.15
+tqdm>=4.65
+xxhash>=3.0
+hnswlib>=0.7
+intel-extension-for-pytorch>=2.3
+torch-directml>=0.2
+matplotlib>=3.7
+pytest>=7.0
+ruff>=0.2
+hnswlib>=0.7

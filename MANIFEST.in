@@ -1,0 +1,10 @@
+include README.md
+include CHANGELOG.md
+include LICENSE
+include pyproject.toml
+include run.sh
+include run.bat
+recursive-include lucid *.py
+recursive-include lucid/resources *.json
+recursive-include scripts *.py
+recursive-include tests *.py
