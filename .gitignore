@@ -32,6 +32,8 @@ lucid_output/
 *.pth
 *.pt
 *.onnx
+# But keep the bundled ICNet model
+!lucid/resources/icnet.pth
 
 # LUCID workspace (generated during processing)
 lucid_workspace_*/

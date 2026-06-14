@@ -19,6 +19,9 @@ MODEL_URL = (
 
 logger = logging.getLogger(__name__)
 
+# Bundled model path (shipped with the package)
+_BUNDLED_MODEL = Path(__file__).parent.parent / "resources" / "icnet.pth"
+
 
 def get_cache_dir() -> Path:
     return Path(user_cache_dir("lucid", "Phips"))
@@ -30,22 +33,39 @@ def get_default_model_path() -> Path:
 
 
 def ensure_model_downloaded(model_path: Optional[Path] = None) -> Path:
-    """Download ICNet model weights if not present.
+    """Ensure ICNet model weights are available, with bundled fallback.
+
+    Checks in order:
+    1. Custom path (if provided via --icnet)
+    2. Bundled model in package resources
+    3. Cache directory (previously downloaded)
+    4. Download from GitHub releases
 
     Args:
-        model_path: Optional custom path. Uses default cache if not provided.
+        model_path: Optional custom path. Uses bundled/cache if not provided.
 
     Returns:
         Path to model weights file.
     """
-    path = model_path or get_default_model_path()
+    # 1. Custom path
+    if model_path is not None and model_path.exists():
+        logger.info("Using custom model path: %s", model_path)
+        return model_path
 
-    if path.exists():
-        logger.info("Model already cached at %s", path)
-        return path
+    # 2. Bundled model
+    if _BUNDLED_MODEL.exists():
+        logger.info("Using bundled ICNet model: %s", _BUNDLED_MODEL)
+        return _BUNDLED_MODEL
 
-    logger.info("Downloading ICNet model weights to %s", path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    # 3. Cache directory
+    cache_path = get_default_model_path()
+    if cache_path.exists():
+        logger.info("Using cached model: %s", cache_path)
+        return cache_path
+
+    # 4. Download from GitHub
+    logger.info("Downloading ICNet model weights to %s", cache_path)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         state = torch.hub.load_state_dict_from_url(
@@ -53,7 +73,7 @@ def ensure_model_downloaded(model_path: Optional[Path] = None) -> Path:
             map_location="cpu",
             weights_only=True,
         )
-        torch.save(state, path)
+        torch.save(state, cache_path)
         logger.info("Model downloaded successfully")
     except Exception as exc:
         raise RuntimeError(
@@ -61,4 +81,4 @@ def ensure_model_downloaded(model_path: Optional[Path] = None) -> Path:
             "Please download manually and use --icnet option."
         ) from exc
 
-    return path
+    return cache_path

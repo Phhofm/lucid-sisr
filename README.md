@@ -1,7 +1,6 @@
 # LUCID: Mathematical Integrity for SISR Datasets
 
-[![PyPI](https://img.shields.io/pypi/v/lucid-sisr.svg)](https://pypi.org/project/lucid-sisr/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/Phhofm/lucid/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/Phhofm/lucid-sisr/blob/main/LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
 > **Lu**cent **C**orrelation & **I**ndependence in **D**ata
@@ -33,20 +32,14 @@ To install and run LUCID immediately without typing any commands, we provide aut
 
 ## Command Line Quick Start
 
-### Install from PyPI (recommended once published)
-
-```bash
-pip install lucid-sisr
-# Optional: PyTorch with CUDA for GPU acceleration
-pip install torch --index-url https://download.pytorch.org/whl/cu121
-```
-
 ### Install from source
 
 ```bash
-git clone https://github.com/Phhofm/lucid.git
-cd lucid
+git clone https://github.com/Phhofm/lucid-sisr.git
+cd lucid-sisr
 pip install -e .
+# Optional: PyTorch with CUDA for GPU acceleration
+pip install torch --index-url https://download.pytorch.org/whl/cu121
 ```
 
 ### Run
@@ -57,7 +50,7 @@ python -m lucid --input /path/to/raw_images --output /path/to/filtered_dataset
 
 That's it. LUCID will:
 
-1. **Auto-download** the ICNet model on first run.
+1. **Auto-download** the ICNet model on first run (bundled in the repo; falls back to [GitHub releases](https://github.com/umzi2/Dataset_Preprocessing/releases) if not found).
 2. **Tile** images into 128/256/512/1024 px patches (512 is native; other sizes are auto-calibrated — see *Tile size & calibration* below).
 3. **Filter** tiles using signal metrics (entropy, blockiness, gradient energy, noise, aliasing, sharpness).
 4. **Score** tiles with a learned complexity model (ICNet) on GPU.
@@ -113,7 +106,7 @@ pip install lucid-sisr[directml]
 LUCID auto-detects the active accelerator at startup and logs which one is in use:
 `Compute device: CUDA — NVIDIA GeForce RTX 5070` (or `ROCm`, `XPU`, `MPS`, `DirectML`, `CPU`).
 
-> **Note:** LUCID auto-detects GPU and falls back to CPU automatically. For NVIDIA GPU acceleration, install PyTorch with CUDA support using the command above. Apple Silicon (MPS) and CPU-only machines are fully supported but will process slower. On Linux, install `python3-tk` (e.g., `sudo apt install python3-tk`) for the GUI.
+> **Note:** LUCID auto-detects GPU and falls back to CPU automatically. For NVIDIA GPU acceleration, install PyTorch with CUDA support using the command above. Apple Silicon (MPS) and CPU-only machines are fully supported but will process slower. The GUI (`lucid-gui`) requires `python3-tk` (e.g., `sudo apt install python3-tk` on Ubuntu/Debian). Headless servers have no display server.
 
 ---
 
@@ -449,7 +442,7 @@ This approach shifts focus from *"What looks good?"* to *"What helps the network
 
 | Problem | Solution |
 |---|---|
-| **ICNet download fails** | Manually download from [IC9600 releases](https://github.com/umzi2/Dataset_Preprocessing/releases) and pass `--icnet /path/to/ic9600.pth` |
+| **ICNet download fails** | The model is bundled in the repo at `lucid/resources/icnet.pth`. If missing, manually download from [IC9600 releases](https://github.com/umzi2/Dataset_Preprocessing/releases) and pass `--icnet /path/to/ic9600.pth` |
 | **`--tile-size` rejected** | Only 128/256/512/1024 are supported. Run `lucid-calibrate --input <folder>` to add new sizes to the calibration table. |
 | **Bad score distribution at non-512 sizes** | The shipped calibration fits a 7-image reference set. For domain-specific data, regenerate with `lucid-calibrate --input <your-images>` and reinstall. |
 | **CUDA out of memory** | Reduce `--batch` (e.g., `--batch 4`) or `--tile-size` (e.g., `--tile-size 256`). Use `--max-vram-gb` to cap usage |

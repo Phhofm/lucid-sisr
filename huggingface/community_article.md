@@ -195,6 +195,40 @@ training_logs/
 └── screenshots/       # Validation comparison plots
 ```
 
+## LUCID-CC0 v2: Large-Scale Training Data
+
+The v1 dataset proved the concept, but at 231K tiles (32 GB) from PD12M + UHD-IQA, it's limited for large-scale training. **LUCID-CC0 v2** is a massive upgrade: ~200 GB of CC0-licensed tiles sourced entirely from PxHere, processed through LUCID's signal-based filtering pipeline.
+
+### Three-Stage Training Pipeline
+
+v2 is designed around a progressive three-stage training strategy, each stage building on the previous:
+
+| Stage | Dataset | Resolution | Tiles | Purpose |
+|-------|---------|------------|-------|---------|
+| 1. Pretrain | `lucid-cc0-v2` | 256×256 | ~1.3M | Train from scratch on diverse, clean data |
+| 2. Finetune | `lucid-cc0-v2-hc` | 256×256 | ~271K | Focus on high-complexity tiles (≥ 0.85) |
+| 3. Finetune-finetune | `lucid-cc0-v2-hc-512` | 512×512 | — | High-resolution refinement, complexity ≥ 0.85 |
+
+**Stage 1** (`lucid-cc0-v2`): Pretrain a model from scratch on ~1.3M LUCID-filtered tiles. The large tile count provides broad coverage of natural image statistics.
+
+**Stage 2** (`lucid-cc0-v2-hc`): Finetune on a high-complexity subset (~271K tiles, complexity ≥ 0.85). This sharpens the model's ability to reconstruct fine textures and diverse patterns.
+
+**Stage 3** (`lucid-cc0-v2-hc-512`): Finetune again on 512×512 high-complexity tiles. The increased resolution lets the model learn finer detail reconstruction at scale.
+
+### MATLAB-Compatible Downscaling
+
+LR images are generated using bicubic downscaling that matches MATLAB's `imresize` — the standard reference in SR research. This ensures metrics computed during evaluation are directly comparable to published results.
+
+### Datasets
+
+All datasets are CC0-1.0 licensed (public domain) and available on HuggingFace:
+
+| Dataset | HuggingFace Link | Description |
+|---------|------------------|-------------|
+| `lucid-cc0-v2` | [Phips/lucid-cc0-v2](https://huggingface.co/datasets/Phips/lucid-cc0-v2) | Full v2 dataset (~1.3M tiles, 256×256) |
+| `lucid-cc0-v2-hc` | [Phips/lucid-cc0-v2-hc](https://huggingface.co/datasets/Phips/lucid-cc0-v2-hc) | High-complexity subset (~271K tiles, 256×256) |
+| `lucid-cc0-v2-hc-512` | [Phips/lucid-cc0-v2-hc-512](https://huggingface.co/datasets/Phips/lucid-cc0-v2-hc-512) | High-complexity 512×512 tiles |
+
 ## Future Work
 
 - Multi-dataset merging strategies
