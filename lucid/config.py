@@ -28,6 +28,7 @@ class LucidConfig:
     multiscale: bool = True  # default ON (recommended for SISR GT)
     strict: bool = False
     io_throttle_ms: float = 0.0
+    clipiqa_threshold: float = 0.3  # 0.0 = disabled
     dry_run: bool = False
     verbose: bool = False
     resume: bool = False
@@ -68,6 +69,7 @@ class LucidConfig:
             "multiscale": self.multiscale,
             "strict": self.strict,
             "io_throttle_ms": self.io_throttle_ms,
+            "clipiqa_threshold": self.clipiqa_threshold,
             "dry_run": self.dry_run,
             "verbose": self.verbose,
             "resume": self.resume,

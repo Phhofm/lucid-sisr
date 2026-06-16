@@ -28,6 +28,7 @@ def run_pipeline(
     model_path: Path | None,
     tile_size: int,
     threshold: float | None,
+    clipiqa_threshold: float,
     dedupe_threshold: float,
     batch_size: int,
     workers: int,
@@ -51,6 +52,8 @@ def run_pipeline(
         threshold: Minimum ICNet complexity score. If ``None``, the value is
             auto-resolved from the shipped calibration table for the chosen
             ``tile_size`` (R^2 >= 0.94 across all supported sizes).
+        clipiqa_threshold: Minimum CLIP-IQA score for artifact filtering.
+            Removes ringing/haloring and low-quality tiles. 0.0 = disabled.
         dedupe_threshold: Cosine similarity threshold for deduping (default 0.96).
         batch_size: GPU batch size (0 = auto-detect from VRAM).
         workers: Number of parallel CPU workers for tile extraction.
@@ -174,6 +177,7 @@ def run_pipeline(
                     input_dir=input_dir,
                     tile_size=tile_size,
                     threshold=threshold,
+                    clipiqa_threshold=clipiqa_threshold,
                     model_path=model_path,
                     workers=workers,
                     batch_size=batch_size,
@@ -269,6 +273,7 @@ def run_pipeline(
     logger.info("=== LUCID Pipeline Summary ===")
     logger.info("Sources processed: %d", stats["sources_processed"])
     logger.info("Tiles passed ICNet scoring: %d", stats["tiles_scored"])
+    logger.info("Tiles passed clipiqa filtering: >= %.2f", clipiqa_threshold)
     logger.info("Unique tiles finalized: %d", stats["tiles_kept"])
 
     return stats

@@ -158,6 +158,23 @@ def build_parser() -> argparse.ArgumentParser:
             "threshold comparison. Default: enabled (recommended)."
         ),
     )
+    parser.add_argument(
+        "--clipiqa-threshold",
+        type=float,
+        default=0.3,
+        help=(
+            "Minimum CLIP-IQA quality score (0.0-1.0) for artifact filtering. "
+            "Removes ringing/haloring and low-quality tiles. "
+            "Set to 0.0 or pass --no-clipiqa to disable. Default: 0.3"
+        ),
+    )
+    parser.add_argument(
+        "--no-clipiqa",
+        dest="clipiqa_threshold",
+        action="store_const",
+        const=0.0,
+        help="Disable CLIP-IQA quality filtering",
+    )
     return parser
 
 
@@ -200,6 +217,7 @@ def main() -> int:
     cfg.dry_run = args.dry_run
     cfg.cleanup = args.cleanup
     cfg.calibrate = args.calibrate
+    cfg.clipiqa_threshold = args.clipiqa_threshold
     # threshold stays None here; the orchestrator resolves it from the
     # calibration table once tile_size is validated.
 
@@ -249,6 +267,7 @@ def main() -> int:
             model_path=args.icnet,
             tile_size=cfg.tile_size,
             threshold=cfg.threshold,
+            clipiqa_threshold=cfg.clipiqa_threshold,
             dedupe_threshold=cfg.dedupe_threshold,
             batch_size=cfg.batch_size,
             workers=cfg.max_workers,

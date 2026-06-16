@@ -1,0 +1,107 @@
+# HAT-M Training Config: Finetune-finetune on LUCID CC0 v2 HC 512×512 (18K tiles)
+# Stage 3 of the LUCID three-stage training pipeline
+# Pretrain with: HAT_M_LUCID_Pretrain.yml → HAT_M_LUCID_Finetune_HC.yml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/the-database/traiNNer-redux/refs/heads/master/schemas/redux-config.schema.json
+name: 4x_HAT_M_LUCID_FinetuneFinetune_HC_512
+scale: 4
+use_amp: true
+amp_bf16: true
+use_channels_last: true
+fast_matmul: true
+use_compile: false
+compile_mode: default
+compile_dynamic: false
+num_gpu: auto
+manual_seed: 1024
+queue_size: 4
+
+high_order_degradation: true
+high_order_degradations_debug: false
+
+# PURE BICUBIC PIPELINE
+lq_usm: false
+blur_prob: 0.0
+resize_prob: [0, 1, 0] # Always downsample
+resize_mode_list: ["bicubic"]
+resize_mode_prob: [1.0]
+resize_range: [0.25, 0.25] # Fixed 4x
+gaussian_noise_prob: 0.0
+jpeg_prob: 0.0
+
+blur_prob2: 0.0
+resize_prob2: [0, 0, 1] # Always KEEP
+resize_mode_list2: ["bicubic"]
+resize_mode_prob2: [1.0]
+resize_range2: [1.0, 1.0]
+gaussian_noise_prob2: 0.0
+jpeg_prob2: 0.0
+
+resize_mode_list3: ["bicubic"]
+resize_mode_prob3: [1.0]
+
+datasets:
+  train:
+    name: LUCID_CC0_v2_HC_512
+    type: realesrgandataset_traiNNer
+    dataroot_gt: ["/path/to/lucid_cc0_v2_512_hc/train"]
+
+    lq_size: 128
+    use_hflip: true
+    use_rot: true
+    num_worker_per_gpu: 4
+    batch_size_per_gpu: 1
+    accum_iter: 4
+
+  val:
+    name: Urban100
+    type: pairedimagedataset
+    dataroot_gt: ["/path/to/Urban100/HR"]
+    dataroot_lq: ["/path/to/Urban100/x4"]
+
+network_g:
+  type: hat_m
+
+path:
+  # Point to pretrain checkpoint from Stage 2
+  pretrain_network_g: /path/to/4x_HAT_M_LUCID_Finetune_HC/net_g_*.pth
+  strict_load_g: false
+  resume_state: ~
+
+train:
+  ema_decay: 0.999
+  ema_power: 0.75
+  optim_g:
+    type: AdamW
+    lr: !!float 1e-4
+    weight_decay: 0
+    betas: [0.9, 0.99]
+  scheduler:
+    type: MultiStepLR
+    milestones: [200000, 400000, 500000]
+    gamma: 0.5
+  total_iter: 600000
+  warmup_iter: -1
+  losses:
+    - type: charbonnierloss
+      loss_weight: 1.0
+
+val:
+  val_enabled: true
+  val_freq: 5000
+  save_img: true
+  metrics_enabled: true
+  metrics:
+    psnr:
+      type: calculate_psnr
+      crop_border: 4
+      test_y_channel: true
+    ssim:
+      type: calculate_ssim
+      crop_border: 4
+      test_y_channel: true
+
+logger:
+  print_freq: 100
+  save_checkpoint_freq: 5000
+  save_checkpoint_format: safetensors
+  use_tb_logger: true

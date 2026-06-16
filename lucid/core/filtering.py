@@ -39,6 +39,7 @@ def run_ingest(
     input_dir: Path,
     tile_size: int,
     threshold: float,
+    clipiqa_threshold: float,
     model_path: Path,
     workers: int,
     batch_size: int,
@@ -62,6 +63,8 @@ def run_ingest(
         input_dir: Source image folder.
         tile_size: Tile dimension in pixels.
         threshold: Minimum ICNet complexity score.
+        clipiqa_threshold: Minimum CLIP-IQA score for artifact filtering.
+            Removes ringing/haloring and low-quality tiles. 0.0 = disabled.
         model_path: Path to ICNet weights.
         workers: CPU worker count for tile extraction.
         batch_size: GPU batch size for ICNet scoring.
@@ -126,6 +129,7 @@ def run_ingest(
         tile_size=tile_size,
         io_throttle=recommend_io_throttle(workspace, cfg.io_throttle_ms),
         calibrate=getattr(cfg, "calibrate", True),
+        clipiqa_threshold=clipiqa_threshold,
     ) if not dry_run else None
 
     # Tier 3.x accumulators (histogram, threshold audit, outliers).
@@ -264,7 +268,10 @@ def run_ingest(
         except OSError:
             pass
 
-    logger.info("ICNet scoring complete. Passing tiles: %d", tiles_scored)
+    if clipiqa_threshold > 0:
+        logger.info("ICNet + CLIP-IQA scoring complete. Passing tiles: %d (clipiqa >= %.2f)", tiles_scored, clipiqa_threshold)
+    else:
+        logger.info("ICNet scoring complete. Passing tiles: %d", tiles_scored)
     return sources_processed, tiles_scored
 
 
@@ -504,10 +511,12 @@ class _ScoringContext:
         "tile_size",
         "calibrate",
         "writer",
+        "clipiqa_model",
+        "clipiqa_threshold",
     )
 
     def __init__(self, model, device, use_half, mean, std, threshold,
-                 tile_size, calibrate):
+                 tile_size, calibrate, clipiqa_model=None, clipiqa_threshold=0.0):
         self.model = model
         self.device = device
         self.use_half = use_half
@@ -517,6 +526,8 @@ class _ScoringContext:
         self.tile_size = tile_size
         self.calibrate = calibrate
         self.writer: BufferedTileWriter | None = None
+        self.clipiqa_model = clipiqa_model
+        self.clipiqa_threshold = clipiqa_threshold
 
 
 def _build_scoring_context(
@@ -526,6 +537,7 @@ def _build_scoring_context(
     tile_size: int,
     io_throttle: float,
     calibrate: bool,
+    clipiqa_threshold: float = 0.0,
 ) -> _ScoringContext:
     """Build the ICNet scoring context once for the streaming ingest loop.
 
@@ -575,6 +587,22 @@ def _build_scoring_context(
         mean = mean.half()
         std = std.half()
 
+    # Load CLIP-IQA model for artifact filtering (ringing/haloring)
+    clipiqa_model = None
+    if clipiqa_threshold > 0:
+        try:
+            import pyiqa
+            clipiqa_model = pyiqa.create_metric("clipiqa", device=device)
+            logger.info(
+                "CLIP-IQA enabled: threshold=%.2f (removes ringing/haloring)",
+                clipiqa_threshold,
+            )
+        except Exception as exc:
+            logger.warning(
+                "CLIP-IQA unavailable (%s); quality filtering disabled.", exc
+            )
+            clipiqa_threshold = 0.0
+
     return _ScoringContext(
         model=model,
         device=device,
@@ -584,6 +612,8 @@ def _build_scoring_context(
         threshold=threshold,
         tile_size=tile_size,
         calibrate=calibrate,
+        clipiqa_model=clipiqa_model,
+        clipiqa_threshold=clipiqa_threshold,
     )
 
 
@@ -637,7 +667,20 @@ def _score_batch(
         logger.warning("Batch scoring failed: %s", exc)
         return 0, record
 
+    # CLIP-IQA scoring: run on the same batch for artifact detection
+    clipiqa_scores = None
+    if ctx.clipiqa_model is not None and ctx.clipiqa_threshold > 0:
+        try:
+            with torch.no_grad():
+                # clipiqa expects [0,1] float tensors, not normalized
+                ciqa_input = stacked.float() / 255.0
+                clipiqa_scores = ctx.clipiqa_model(ciqa_input).flatten().cpu().float().numpy()
+        except Exception as exc:
+            logger.warning("CLIP-IQA scoring failed: %s", exc)
+            clipiqa_scores = None
+
     tiles_passed = 0
+    tiles_clipped = 0
     with open(scores_csv, "a", newline="") as csv_f:
         writer_csv = csv.writer(csv_f)
         for (t, rgb_arr), sc_raw in zip(items, scores):
@@ -648,7 +691,19 @@ def _score_batch(
                 else sc_raw
             )
             outlier = abs(sc_raw - sc_cal) > 0.10
-            if sc_cal >= ctx.threshold:
+
+            # ICNet gate
+            icnet_pass = sc_cal >= ctx.threshold
+
+            # CLIP-IQA gate (optional)
+            ciqa_pass = True
+            if clipiqa_scores is not None:
+                ciqa_score = float(clipiqa_scores[tiles_passed + tiles_clipped])
+                ciqa_pass = ciqa_score >= ctx.clipiqa_threshold
+                if not ciqa_pass:
+                    tiles_clipped += 1
+
+            if icnet_pass and ciqa_pass:
                 if ctx.writer is not None:
                     ctx.writer.write(t.name, rgb_arr)
                 tiles_passed += 1
