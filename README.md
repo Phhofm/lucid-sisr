@@ -1,9 +1,7 @@
-# LUCID: Mathematical Integrity for SISR Datasets
+# LUCID: SISR Dataset GT Filtering & Preparation Pipeline
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/Phhofm/lucid-sisr/blob/main/LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-
-> **Lu**cent **C**orrelation & **I**ndependence in **D**ata
 
 **Created by [Philip Hofmann](https://github.com/Phhofm)**
 
@@ -418,16 +416,6 @@ LUCID represents the culmination of realizing that:
 5. System safety (`os.nice(15)`) allows background processing without disrupting workflow
 
 This approach shifts focus from *"What looks good?"* to *"What helps the network learn best?"*
-
----
-
-## Naming
-
-**LUCID** = **Lu**cent **C**orrelation & **I**ndependence in **D**ata  
-- *Lucent*: Clear, transparent, radiating light (clarity of purpose)
-- *Understanding*: Structural comprehension over surface appeal
-- *Correlation*: Identifying meaningful relationships in data (complexity scoring via ICNet)
-- *Independence*: Eliminating redundancy through deduplication (ResNet18 fingerprints)
 
 ---
 
