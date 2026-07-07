@@ -26,6 +26,13 @@ except ImportError:  # pragma: no cover
     _HAS_XXHASH = False
 
 
+def tile_digest(tile: np.ndarray) -> int | None:
+    """xxhash digest of a tile's raw bytes, or None when xxhash is missing."""
+    if not _HAS_XXHASH:
+        return None
+    return xxhash.xxh3_64(tile.tobytes()).intdigest()
+
+
 def filter_exact_duplicates(
     tiles: list[np.ndarray],
 ) -> tuple[list[np.ndarray], list[int]]:

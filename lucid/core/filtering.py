@@ -11,11 +11,11 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from ..config import LucidConfig
 from ..io import BufferedTileWriter
 from ..platform import set_process_priority
 from ..resources import recommend_batch_size, recommend_io_throttle
 from ..state import PipelineState
+from .hashing import tile_digest
 from .metrics import measure_all
 from .validation import load_image_as_rgb
 
@@ -47,6 +47,8 @@ def run_ingest(
     resume: bool,
     dry_run: bool = False,
     strict: bool = False,
+    calibrate: bool = True,
+    io_throttle_sec: float = 0.0,
 ) -> tuple[int, int]:
     """Run the full ingest pipeline: signal filter -> ICNet score.
 
@@ -72,13 +74,15 @@ def run_ingest(
         resume: Skip already-processed sources.
         dry_run: Validate only, no writes.
         strict: Abort pipeline on the first unreadable/corrupt image.
+        calibrate: Apply calibration curve to ICNet scores.
+        io_throttle_sec: Seconds to sleep between disk writes (auto-detects USB).
 
     Returns:
-        (sources_processed, tiles_scored) for summary stats.
+        (sources_processed, tiles_passed) for summary stats.
     """
     import shutil
 
-    cfg = LucidConfig.get()
+    io_throttle = recommend_io_throttle(workspace, io_throttle_sec)
     # Per-image staging dir; replaced the flat `raw_tiles/` layout in v3.0
     # so disk peaks at one image's tiles, not the full dataset.
     stage_dir = workspace / "stage"
@@ -127,8 +131,8 @@ def run_ingest(
         model_path=model_path,
         batch_size=effective_batch_size,
         tile_size=tile_size,
-        io_throttle=recommend_io_throttle(workspace, cfg.io_throttle_ms),
-        calibrate=getattr(cfg, "calibrate", True),
+        io_throttle=io_throttle,
+        calibrate=calibrate,
         clipiqa_threshold=clipiqa_threshold,
     ) if not dry_run else None
 
@@ -144,6 +148,7 @@ def run_ingest(
     # Phase 1+2 fused: extract one image, score it, delete staging, repeat.
     # This is Pass 2.1 (per-image streaming) + Pass 2.2 (no global raw_tiles).
     sources_processed = 0
+    tiles_passed_total = 0
     if not dry_run:
         # ProcessPoolExecutor bypasses the GIL so signal-metric work
         # (numpy ops on 512x512x3 arrays) actually parallelizes across cores.
@@ -225,11 +230,13 @@ def run_ingest(
                         image_stage,
                         scored_dir,
                         scores_csv,
+                        source_image=img_path,
                     )
                     all_raw.extend(batch_records["raw"])
                     all_cal.extend(batch_records["cal"])
                     all_names.extend(batch_records["names"])
                     all_paths.extend(batch_records["paths"])
+                    tiles_passed_total += tiles_scored_this
 
                 # Cleanup: drop this image's staging subfolder so peak disk
                 # is bounded to one image's tiles.
@@ -245,7 +252,7 @@ def run_ingest(
         # Dry-run: still walk the source list to count, no real work
         sources_processed = len(sources_to_do)
 
-    tiles_scored = sum(1 for s in all_cal if s is not None)
+    tiles_passed = tiles_passed_total
 
     # Tier 3.1 / 3.3 / 3.5: post-run artifacts.
     if all_raw and not dry_run:
@@ -258,7 +265,7 @@ def run_ingest(
             paths=all_paths,
             tile_size=tile_size,
             threshold=threshold,
-            calibrate=getattr(cfg, "calibrate", True),
+            calibrate=calibrate,
         )
 
     # Remove the empty stage dir if no per-image subfolders left
@@ -269,10 +276,10 @@ def run_ingest(
             pass
 
     if clipiqa_threshold > 0:
-        logger.info("ICNet + CLIP-IQA scoring complete. Passing tiles: %d (clipiqa >= %.2f)", tiles_scored, clipiqa_threshold)
+        logger.info("ICNet + CLIP-IQA scoring complete: %d/%d tiles passed (clipiqa >= %.2f)", tiles_passed, len(all_raw), clipiqa_threshold)
     else:
-        logger.info("ICNet scoring complete. Passing tiles: %d", tiles_scored)
-    return sources_processed, tiles_scored
+        logger.info("ICNet scoring complete: %d/%d tiles passed.", tiles_passed, len(all_raw))
+    return sources_processed, tiles_passed
 
 
 def extract_tiles_to_staging(
@@ -330,15 +337,12 @@ def extract_tiles_to_staging(
                     continue
 
                 # Tier 2.3: drop pixel-identical boundary tiles
-                try:
-                    import xxhash
-                    h_digest = xxhash.xxh3_64(tile.tobytes()).intdigest()
+                h_digest = tile_digest(tile)
+                if h_digest is not None:
                     if h_digest in seen_hashes:
                         dup_count += 1
                         continue
                     seen_hashes.add(h_digest)
-                except ImportError:  # pragma: no cover
-                    pass
 
                 tile_name = f"{name_base}_t{y}_{x}.png"
                 cv2.imwrite(
@@ -359,120 +363,6 @@ def extract_tiles_to_staging(
         return image_stage, 0, f"0 tiles passed signal filter for {img_path.name}"
 
     return image_stage, total_passed, None
-
-
-def _score_tiles_gpu(
-    tile_dir: Path,
-    scored_dir: Path,
-    scores_csv: Path,
-    threshold: float,
-    model_path: Path,
-    batch_size: int,
-    tile_size: int,
-    dry_run: bool,
-    io_throttle: float,
-    calibrate: bool = True,
-) -> int:
-    """[DEPRECATED: use ``_build_scoring_context`` + ``_score_staged_tiles``].
-
-    Kept as a one-shot fallback for callers that still pre-stage tiles
-    into a flat directory. The streaming ingest path in v3.0 does not
-    use this function.
-    """
-    from ..models.icnet import ICNet
-    from ..resources import resolve_device
-    from ..resources.icnet_calibration import (
-        calibration_status_label,
-        suggested_threshold,
-    )
-
-    if dry_run:
-        return 0
-
-    if not calibrate:
-        logger.info(
-            "Score calibration disabled (--no-calibrate); raw ICNet scores "
-            "will be used for the threshold comparison."
-        )
-    elif tile_size != 512:
-        r2_label = calibration_status_label(tile_size)
-        logger.info(
-            "Tile size %dpx is non-native; using %s calibration. "
-            "Suggested --threshold is %.2f (passed %.2f).",
-            tile_size,
-            r2_label,
-            suggested_threshold(tile_size),
-            threshold,
-        )
-
-    device = resolve_device("auto")
-    use_half = device in ("cuda", "xpu")
-
-    model = ICNet(is_pretrain=False, size1=tile_size, size2=tile_size // 2)
-    model.load_state_dict(
-        torch.load(str(model_path), map_location=device, weights_only=True)
-    )
-    model.to(device).eval()
-    if use_half:
-        model.half()
-
-    all_tiles = sorted(tile_dir.glob("*.png"))
-    logger.info("Scoring %d tiles with ICNet on %s (fp%s)...",
-                len(all_tiles), device, "16" if use_half else "32")
-
-    mean = torch.tensor([0.485, 0.456, 0.406], device=device).view(1, 3, 1, 1)
-    std = torch.tensor([0.229, 0.224, 0.225], device=device).view(1, 3, 1, 1)
-    if use_half:
-        mean = mean.half()
-        std = std.half()
-
-    ctx = _ScoringContext(
-        model=model,
-        device=device,
-        use_half=use_half,
-        mean=mean,
-        std=std,
-        threshold=threshold,
-        tile_size=tile_size,
-        calibrate=calibrate,
-    )
-
-    _init_score_csv(scores_csv)
-    all_raw: list[float] = []
-    all_cal: list[float] = []
-    all_names: list[str] = []
-    all_paths: list[str] = []
-    tiles_passed = 0
-
-    with BufferedTileWriter(scored_dir, throttle_sec=io_throttle, buffer_size=64) as writer:
-        ctx.writer = writer
-        for i in tqdm(range(0, len(all_tiles), batch_size), desc="Scoring"):
-            batch_tiles = all_tiles[i : i + batch_size]
-            if not batch_tiles:
-                continue
-            items = _load_batch_items(batch_tiles)
-            if not items:
-                continue
-            tp, rec = _score_batch(ctx, items, scores_csv)
-            tiles_passed += tp
-            all_raw.extend(rec["raw"])
-            all_cal.extend(rec["cal"])
-            all_names.extend(rec["names"])
-            all_paths.extend(rec["paths"])
-
-    if all_raw:
-        _write_score_artifacts(
-            scores_csv=scores_csv,
-            scored_dir=scored_dir,
-            raw=all_raw,
-            cal=all_cal,
-            names=all_names,
-            paths=all_paths,
-            tile_size=tile_size,
-            threshold=threshold,
-            calibrate=calibrate,
-        )
-    return tiles_passed
 
 
 def _load_batch_items(
@@ -513,10 +403,13 @@ class _ScoringContext:
         "writer",
         "clipiqa_model",
         "clipiqa_threshold",
+        "batch_size",
+        "io_throttle",
     )
 
     def __init__(self, model, device, use_half, mean, std, threshold,
-                 tile_size, calibrate, clipiqa_model=None, clipiqa_threshold=0.0):
+                 tile_size, calibrate, clipiqa_model=None, clipiqa_threshold=0.0,
+                 batch_size=32, io_throttle=0.0):
         self.model = model
         self.device = device
         self.use_half = use_half
@@ -528,6 +421,8 @@ class _ScoringContext:
         self.writer: BufferedTileWriter | None = None
         self.clipiqa_model = clipiqa_model
         self.clipiqa_threshold = clipiqa_threshold
+        self.batch_size = batch_size
+        self.io_throttle = io_throttle
 
 
 def _build_scoring_context(
@@ -551,8 +446,6 @@ def _build_scoring_context(
         calibration_status_label,
         suggested_threshold,
     )
-
-    del batch_size, io_throttle  # used at the call site, not here
 
     if not calibrate:
         logger.info(
@@ -587,7 +480,7 @@ def _build_scoring_context(
         mean = mean.half()
         std = std.half()
 
-    # Load CLIP-IQA model for artifact filtering (ringing/haloring)
+# Load CLIP-IQA model for artifact filtering (ringing/haloring)
     clipiqa_model = None
     if clipiqa_threshold > 0:
         try:
@@ -599,7 +492,8 @@ def _build_scoring_context(
             )
         except Exception as exc:
             logger.warning(
-                "CLIP-IQA unavailable (%s); quality filtering disabled.", exc
+                "CLIP-IQA unavailable (%s); quality filtering disabled. "
+                "Install with `pip install lucid-sisr[clipiqa]`.", exc
             )
             clipiqa_threshold = 0.0
 
@@ -614,6 +508,8 @@ def _build_scoring_context(
         calibrate=calibrate,
         clipiqa_model=clipiqa_model,
         clipiqa_threshold=clipiqa_threshold,
+        batch_size=batch_size,
+        io_throttle=io_throttle,
     )
 
 
@@ -629,6 +525,7 @@ def _init_score_csv(scores_csv: Path) -> None:
                 "score_calibrated",
                 "calibration_outlier",
                 "source",
+                "source_image",
             ]
         )
 
@@ -637,6 +534,7 @@ def _score_batch(
     ctx: _ScoringContext,
     items: list[tuple[Path, "np.ndarray"]],  # noqa: F821
     scores_csv: Path,
+    source_image: Path | None = None,
 ) -> tuple[int, dict[str, list]]:
     """Score a single batch of (tile_path, rgb_array) and stream results.
 
@@ -683,7 +581,7 @@ def _score_batch(
     tiles_clipped = 0
     with open(scores_csv, "a", newline="") as csv_f:
         writer_csv = csv.writer(csv_f)
-        for (t, rgb_arr), sc_raw in zip(items, scores):
+        for i, ((t, rgb_arr), sc_raw) in enumerate(zip(items, scores)):
             sc_raw = float(sc_raw)
             sc_cal = (
                 apply_calibration(sc_raw, ctx.tile_size)
@@ -698,7 +596,7 @@ def _score_batch(
             # CLIP-IQA gate (optional)
             ciqa_pass = True
             if clipiqa_scores is not None:
-                ciqa_score = float(clipiqa_scores[tiles_passed + tiles_clipped])
+                ciqa_score = float(clipiqa_scores[i])
                 ciqa_pass = ciqa_score >= ctx.clipiqa_threshold
                 if not ciqa_pass:
                     tiles_clipped += 1
@@ -714,6 +612,7 @@ def _score_batch(
                     f"{sc_cal:.6f}",
                     "1" if outlier else "0",
                     str(t),
+                    str(source_image) if source_image else "",
                 ]
             )
             record["raw"].append(sc_raw)
@@ -728,6 +627,7 @@ def _score_staged_tiles(
     image_stage: Path,
     scored_dir: Path,
     scores_csv: Path,
+    source_image: Path | None = None,
 ) -> tuple[int, dict[str, list]]:
     """Score every PNG in ``image_stage`` (Pass 2.1 streaming).
 
@@ -741,10 +641,10 @@ def _score_staged_tiles(
 
     tiles_passed_total = 0
     record: dict[str, list] = {"raw": [], "cal": [], "names": [], "paths": []}
-    batch_size = 32  # per-image; small enough to stream in real time
+    batch_size = ctx.batch_size
 
     with BufferedTileWriter(
-        scored_dir, throttle_sec=0.0, buffer_size=64
+        scored_dir, throttle_sec=ctx.io_throttle, buffer_size=64
     ) as writer:
         ctx.writer = writer
         for i in range(0, len(tile_paths), batch_size):
@@ -756,7 +656,7 @@ def _score_staged_tiles(
                     continue
                 rgb = cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
                 items.append((t, rgb))
-            tp, rec = _score_batch(ctx, items, scores_csv)
+            tp, rec = _score_batch(ctx, items, scores_csv, source_image=source_image)
             tiles_passed_total += tp
             record["raw"].extend(rec["raw"])
             record["cal"].extend(rec["cal"])

@@ -3,12 +3,23 @@ from __future__ import annotations
 
 import csv
 import logging
+import re
 import shutil
 from pathlib import Path
 
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
+
+# Tile names are "{source_stem}_s{scale:03d}_t{y}_{x}.png"; the anchored suffix
+# match keeps source stems that themselves contain "_s" intact.
+_TILE_NAME_RE = re.compile(r"^(?P<stem>.+)_s\d{3}_t\d+_\d+$")
+
+
+def source_stem_for_tile(tile_stem: str) -> str | None:
+    """Return the source-image stem encoded in a tile filename, or None."""
+    m = _TILE_NAME_RE.match(tile_stem)
+    return m.group("stem") if m else None
 
 
 def run_finalize(
@@ -90,7 +101,7 @@ def run_finalize(
         file_exists = lineage_path.exists()
         # Tier 3.4: enrich with per-image complexity stats from the scores CSV
         # (if available) so users can spot images where every tile was marginal.
-        per_image_stats = _collect_per_image_stats(input_dir)
+        per_image_stats, tile_to_source = _collect_per_image_stats(input_dir)
         fields = [
             "id",
             "final_name",
@@ -103,17 +114,19 @@ def run_finalize(
             "source_image_tiles_kept",
         ]
         for rec in records:
-            # The scores CSV is keyed by source-image stem; the lineage
-            # original_name is the full tile name. Extract the stem for the
-            # lookup.
-            stem = str(rec["original_name"])
-            if "_s" in stem:
-                stem = stem.split("_s", 1)[0]
+            tile_name = rec["original_name"]
+            stem = source_stem_for_tile(tile_name)
+            if stem is None:
+                stem = tile_name.rsplit(".", 1)[0]
             stats = per_image_stats.get(stem, {})
             rec["source_image_min_complexity"] = str(stats.get("min", ""))
             rec["source_image_mean_complexity"] = str(stats.get("mean", ""))
             rec["source_image_max_complexity"] = str(stats.get("max", ""))
             rec["source_image_tiles_kept"] = str(stats.get("count", ""))
+            # Use true source path from scores CSV if available
+            true_source = tile_to_source.get(tile_name)
+            if true_source:
+                rec["original_path"] = true_source
         with open(lineage_path, "a" if file_exists else "w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=fields)
             if not file_exists:
@@ -124,26 +137,29 @@ def run_finalize(
     return kept
 
 
-def _collect_per_image_stats(input_dir: Path) -> dict[str, dict[str, float]]:
+def _collect_per_image_stats(
+    input_dir: Path,
+) -> tuple[dict[str, dict[str, float]], dict[str, str]]:
     """Aggregate per-image score stats from the workspace scores CSV.
 
-    Returns a mapping of ``original_name -> {min, mean, max, count}``.
+    Returns a tuple ``(stats_by_image, tile_to_source)`` where ``stats_by_image``
+    maps source stem to per-image score stats and ``tile_to_source`` maps tile
+    name to the true source image path.
     """
     scores_csv = input_dir.parent / "scores" / "ingest_scores.csv"
     if not scores_csv.exists():
-        return {}
+        return {}, {}
     by_image: dict[str, list[float]] = {}
+    tile_to_source: dict[str, str] = {}
     try:
         with open(scores_csv, newline="") as f:
             reader = csv.DictReader(f)
             for row in reader:
+                tile_name = row.get("tile_name", "")
                 src = row.get("source", "")
-                # source path looks like /workspace/raw_tiles/<img_stem>_s100_t0_0.png
-                # Pull the image stem (everything before the _sNNN_ marker).
                 src_name = Path(src).name
-                if "_s" in src_name:
-                    stem = src_name.split("_s", 1)[0]
-                else:
+                stem = source_stem_for_tile(src_name)
+                if stem is None:
                     stem = src_name.rsplit(".", 1)[0]
                 if not stem:
                     continue
@@ -152,9 +168,12 @@ def _collect_per_image_stats(input_dir: Path) -> dict[str, dict[str, float]]:
                 except (TypeError, ValueError):
                     continue
                 by_image.setdefault(stem, []).append(sc)
+                src_img = row.get("source_image", "")
+                if src_img:
+                    tile_to_source[tile_name] = src_img
     except Exception as exc:
         logger.warning("Could not load scores for per-image stats: %s", exc)
-        return {}
+        return {}, {}
     out: dict[str, dict[str, float]] = {}
     for stem, scores in by_image.items():
         out[stem] = {
@@ -163,7 +182,7 @@ def _collect_per_image_stats(input_dir: Path) -> dict[str, dict[str, float]]:
             "mean": sum(scores) / len(scores),
             "count": len(scores),
         }
-    return out
+    return out, tile_to_source
 
 
 def _resolve_dataset_tag(explicit: str | None, input_dir: Path) -> str:
@@ -194,9 +213,9 @@ def _tag_for_tile(tile_path: Path, fallback: str) -> str:
     If the stem is missing or uninformative we use the per-stage fallback
     so the lineage CSV never records ``scored`` as a dataset name.
     """
-    stem = tile_path.stem
-    if "_s" in stem:
-        candidate = stem.split("_s", 1)[0].strip()
+    stem = source_stem_for_tile(tile_path.stem)
+    if stem is not None:
+        candidate = stem.strip()
         if candidate and candidate.lower() not in {"scored", "raw_tiles"}:
             return candidate
     return fallback

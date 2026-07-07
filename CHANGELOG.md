@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [3.1.0] - 2026-07-07
+
+### Fixed
+- CLIP-IQA per-tile score indexing bug: tiles failing ICNet gate now correctly index into CLIP-IQA scores array
+- `--batch` and `--io-throttle-ms` parameters now honored in streaming scoring path
+- HNSW dedupe index growth now preserves vectors via `resize_index()` instead of rebuilding
+- Pass-count statistics now correctly report tiles passed ICNet scoring
+- Tile-name parsing now robust for stems containing `_s` via `source_stem_for_tile()` helper
+- Lineage CSV now records true source-image paths instead of workspace paths
+- Dedupe stage no longer rescans `redundant/` or counts unreadable tiles as kept
+- Worker count default on 2-core machines now uses `max(1, cpu_count - 2)` correctly
+
+### Changed
+- Configuration singleton (`LucidConfig`) removed; all parameters now explicit in `run_ingest()` and `run_pipeline()`
+- Added `clipiqa` optional dependency group for CLIP-IQA filtering
+- Bundled `icnet.pth` now ships in wheels/sdists via MANIFEST.in update
+
+### Removed
+- Deprecated `_score_tiles_gpu` function (streaming path only)
+- Duplicate `scripts/calibrate_icnet.py` (use packaged copy at `lucid/scripts/`)
+- Standalone `score_and_filter.py` (superseded by `--clipiqa-threshold`)
+
 ## [3.0.1] - 2026-06-05
 
 ### Changed

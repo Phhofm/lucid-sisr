@@ -10,7 +10,6 @@ from pathlib import Path
 
 import pytest
 
-from lucid.config import LucidConfig
 from lucid.pipeline import run_pipeline
 
 CALIB_DIR = Path("/home/phhofm/Documents/filteing_test/input")
@@ -21,7 +20,6 @@ def pipeline_output(tmp_path_factory):
     """Run the full pipeline once per test module to keep wall time down."""
     out = tmp_path_factory.mktemp("pipeline_out")
     workspace = out / "workspace"
-    LucidConfig.reset()
     stats = run_pipeline(
         input_dir=CALIB_DIR,
         output_dir=out,
@@ -29,6 +27,7 @@ def pipeline_output(tmp_path_factory):
         model_path=None,
         tile_size=128,
         threshold=None,  # auto
+        clipiqa_threshold=0.3,
         dedupe_threshold=0.96,
         batch_size=0,
         workers=2,
@@ -119,8 +118,8 @@ def test_pipeline_summary_stats(pipeline_output):
     _, _, stats = pipeline_output
     # 7 source images in the calibration folder
     assert stats["sources_processed"] == 7
-    # Some tiles scored (signal filter + ICNet)
-    assert stats["tiles_scored"] > 0
+    # Some tiles passed ICNet + CLIP-IQA scoring
+    assert stats["tiles_passed"] > 0
     # At least one tile passed both stages
     assert stats["tiles_kept"] > 0
 
@@ -142,7 +141,6 @@ def test_pipeline_no_duplicate_final_tiles(pipeline_output):
 def test_pipeline_with_multiscale_produces_more_tiles(tmp_path):
     """Tier default: multiscale=ON should produce >= as many final tiles
     as multiscale=OFF for the same threshold, on the same inputs."""
-    LucidConfig.reset()
     out = tmp_path / "ms"
     run_pipeline(
         input_dir=CALIB_DIR,
@@ -151,6 +149,7 @@ def test_pipeline_with_multiscale_produces_more_tiles(tmp_path):
         model_path=None,
         tile_size=128,
         threshold=0.45,
+        clipiqa_threshold=0.3,
         dedupe_threshold=0.96,
         batch_size=0,
         workers=2,
@@ -164,7 +163,6 @@ def test_pipeline_with_multiscale_produces_more_tiles(tmp_path):
         cleanup=True,
     )
     out_single = tmp_path / "single"
-    LucidConfig.reset()
     run_pipeline(
         input_dir=CALIB_DIR,
         output_dir=out_single,
@@ -172,6 +170,7 @@ def test_pipeline_with_multiscale_produces_more_tiles(tmp_path):
         model_path=None,
         tile_size=128,
         threshold=0.45,
+        clipiqa_threshold=0.3,
         dedupe_threshold=0.96,
         batch_size=0,
         workers=2,
@@ -192,7 +191,6 @@ def test_pipeline_with_multiscale_produces_more_tiles(tmp_path):
 def test_threshold_auto_adjust_per_tile_size(tmp_path):
     """When no --threshold is passed, the orchestrator should use the
     calibration-suggested value, not 0.45."""
-    LucidConfig.reset()
     out = tmp_path / "auto"
     run_pipeline(
         input_dir=CALIB_DIR,
@@ -201,6 +199,7 @@ def test_threshold_auto_adjust_per_tile_size(tmp_path):
         model_path=None,
         tile_size=128,
         threshold=None,
+        clipiqa_threshold=0.0,
         dedupe_threshold=0.96,
         batch_size=0,
         workers=2,

@@ -16,8 +16,10 @@ from pathlib import Path
 
 import torch.multiprocessing as mp
 
-from lucid.config import LucidConfig
 from lucid.pipeline import run_pipeline
+
+# Threshold is read from args, but auto-resolved in run_pipeline if None
+_SILENT_THRESHOLD = None
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -83,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--workers",
         type=int,
-        default=max(1, mp.cpu_count() - 2 or 4),
+        default=max(1, mp.cpu_count() - 2),
         help="CPU worker count",
     )
     parser.add_argument(
@@ -199,30 +201,8 @@ def main() -> int:
         )
     resolved_output = args.positional_output or args.output
 
-    # Initialize singleton config
-    cfg = LucidConfig.get()
-    cfg.input_dir = Path(resolved_input)
-    cfg.output_dir = Path(resolved_output)
-    cfg.workspace = Path(args.workspace) if args.workspace else None
-    cfg.tile_size = args.tile_size
-    cfg.dedupe_threshold = args.dedupe_threshold
-    cfg.batch_size = args.batch
-    cfg.max_workers = args.workers
-    cfg.max_vram_gb = args.max_vram_gb
-    cfg.multiscale = args.multiscale
-    cfg.io_throttle_ms = args.io_throttle_ms / 1000.0
-    cfg.strict = args.strict
-    cfg.resume = args.resume
-    cfg.verbose = args.verbose
-    cfg.dry_run = args.dry_run
-    cfg.cleanup = args.cleanup
-    cfg.calibrate = args.calibrate
-    cfg.clipiqa_threshold = args.clipiqa_threshold
-    # threshold stays None here; the orchestrator resolves it from the
-    # calibration table once tile_size is validated.
-
     # Logging
-    log_level = logging.DEBUG if cfg.verbose else logging.INFO
+    log_level = logging.DEBUG if args.verbose else logging.INFO
     handlers = [logging.StreamHandler(sys.stdout)]
     logging.basicConfig(
         level=log_level,
@@ -234,54 +214,55 @@ def main() -> int:
     # Validate tile size against the supported set
     from lucid.resources.icnet_calibration import (
         SUPPORTED_SIZES,
+        suggested_threshold,
     )
 
-    if cfg.tile_size not in SUPPORTED_SIZES:
+    if args.tile_size not in SUPPORTED_SIZES:
         logger.error(
             "--tile-size=%d is not in the supported set %s. "
             "Pick one of these or run `lucid-calibrate` to extend the range.",
-            cfg.tile_size,
+            args.tile_size,
             sorted(SUPPORTED_SIZES),
         )
         sys.exit(2)
 
     # Auto-adjust threshold per tile size from the calibration table.
-    from lucid.resources.icnet_calibration import suggested_threshold
-
-    if cfg.threshold is None:
-        cfg.threshold = suggested_threshold(cfg.tile_size)
+    threshold = args.threshold
+    if threshold is None:
+        threshold = suggested_threshold(args.tile_size)
         logger.info(
             "Auto-threshold for %dpx: %.3f (pass --threshold to override).",
-            cfg.tile_size,
-            cfg.threshold,
+            args.tile_size,
+            threshold,
         )
 
-    if cfg.dry_run:
+    if args.dry_run:
         logger.info("=== DRY RUN === No tiles will be written.")
 
     try:
         run_pipeline(
-            input_dir=cfg.input_dir,
-            output_dir=cfg.output_dir,
-            workspace=cfg.workspace,
+            input_dir=Path(resolved_input),
+            output_dir=Path(resolved_output),
+            workspace=Path(args.workspace) if args.workspace else None,
             model_path=args.icnet,
-            tile_size=cfg.tile_size,
-            threshold=cfg.threshold,
-            clipiqa_threshold=cfg.clipiqa_threshold,
-            dedupe_threshold=cfg.dedupe_threshold,
-            batch_size=cfg.batch_size,
-            workers=cfg.max_workers,
-            max_vram_gb=cfg.max_vram_gb,
-            multiscale=cfg.multiscale,
-            io_throttle_sec=cfg.io_throttle_ms,
-            strict=cfg.strict,
-            resume=cfg.resume,
+            tile_size=args.tile_size,
+            threshold=threshold,
+            clipiqa_threshold=args.clipiqa_threshold,
+            dedupe_threshold=args.dedupe_threshold,
+            batch_size=args.batch,
+            workers=args.workers,
+            max_vram_gb=args.max_vram_gb,
+            multiscale=args.multiscale,
+            io_throttle_sec=args.io_throttle_ms / 1000.0,
+            strict=args.strict,
+            resume=args.resume,
             stage=args.stage,
-            dry_run=cfg.dry_run,
-            cleanup=cfg.cleanup,
+            dry_run=args.dry_run,
+            cleanup=args.cleanup,
+            calibrate=args.calibrate,
         )
     except Exception as exc:
-        logger.error("Pipeline failed: %s", exc, exc_info=cfg.verbose)
+        logger.error("Pipeline failed: %s", exc, exc_info=args.verbose)
         return 1
 
     logger.info("=== LUCID pipeline complete ===")

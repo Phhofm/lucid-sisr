@@ -20,11 +20,9 @@ from lucid.models.icnet import slam as slam  # noqa: F401
 from lucid.models.icnet import ResNet as ResNet  # noqa: F401
 from lucid.models.icnet import ConvBlock as ConvBlock  # noqa: F401
 
-# --- Marked-deprecated but kept for back-compat ---
-from lucid.core.filtering import _score_tiles_gpu  # noqa: F401
-
 # --- Used by tests, vulture can't see cross-file into tests/ ---
 from lucid.core.hashing import filter_exact_duplicates  # noqa: F401
+from lucid.core.hashing import tile_digest  # noqa: F401
 from lucid.state import is_source_done  # noqa: F401
 from lucid.state import get_completed_sources  # noqa: F401
 from lucid.core.dedupe import hnswlib_available  # noqa: F401

@@ -36,9 +36,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# CLIP-IQA artifact filter (--clipiqa-threshold). Enabled by default when
+# installed; the pipeline logs a warning and skips the stage when missing.
+clipiqa = ["pyiqa>=0.1.10"]
 # HNSW approximate nearest-neighbour for dedupe (huge speedup + scales to
 # 10M+ tiles). Falls back to brute-force cosine matmul if not installed.
-ann = ["hnswlib>=0.7"]
+ann = ["hnswlib>=0.7", "pyiqa>=0.1.10"]
 # Intel ARC / discrete Intel GPU support (PyTorch XPU backend).
 xpu = ["intel-extension-for-pytorch>=2.3"]
 # AMD ROCm GPUs require a torch wheel built with HIP; this extra just
@@ -54,7 +57,7 @@ dev = [
     "pytest>=7.0",
     "ruff>=0.2",
 ]
-all = ["hnswlib>=0.7"]
+all = ["hnswlib>=0.7", "matplotlib>=3.7", "pyiqa>=0.1.10"]
 
 [project.scripts]
 lucid = "lucid.__main__:main"
@@ -62,15 +65,15 @@ lucid-gui = "lucid.gui:main"
 lucid-calibrate = "lucid.calibrate:main"
 
 [project.urls]
-Homepage = "https://github.com/Phhofm/lucid"
-Documentation = "https://github.com/Phhofm/lucid#readme"
-Repository = "https://github.com/Phhofm/lucid"
+Homepage = "https://github.com/Phhofm/lucid-sisr"
+Documentation = "https://github.com/Phhofm/lucid-sisr#readme"
+Repository = "https://github.com/Phhofm/lucid-sisr"
 
 [tool.setuptools.packages.find]
 include = ["lucid*"]
 
 [tool.setuptools.package-data]
-lucid = ["resources/*.json"]
+lucid = ["resources/*.json", "resources/*.pth"]
 
 [tool.ruff]
 line-length = 100

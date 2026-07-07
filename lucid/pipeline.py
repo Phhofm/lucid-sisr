@@ -40,6 +40,7 @@ def run_pipeline(
     stage: Literal["all", "ingest", "dedupe", "finalize"],
     dry_run: bool,
     cleanup: bool = False,
+    calibrate: bool = True,
 ) -> dict[str, int]:
     """Run the complete LUCID pipeline or a specific stage.
 
@@ -67,12 +68,12 @@ def run_pipeline(
         cleanup: Remove workspace directory after successful completion.
 
     Returns:
-        dict with summary stats: sources_processed, tiles_raw, tiles_scored, tiles_kept.
+        dict with summary stats: sources_processed, tiles_scored, tiles_passed, tiles_kept.
     """
     stats: dict[str, int] = {
         "sources_processed": 0,
-        "tiles_raw": 0,
         "tiles_scored": 0,
+        "tiles_passed": 0,
         "tiles_kept": 0,
     }
 
@@ -171,7 +172,7 @@ def run_pipeline(
             state = PipelineState(workspace)
             state.connect()
             try:
-                sources, scored = filtering.run_ingest(
+                sources, passed = filtering.run_ingest(
                     state=state,
                     workspace=workspace,
                     input_dir=input_dir,
@@ -185,9 +186,11 @@ def run_pipeline(
                     resume=resume,
                     dry_run=dry_run,
                     strict=strict,
+                    calibrate=calibrate,
+                    io_throttle_sec=io_throttle_sec,
                 )
                 stats["sources_processed"] = sources
-                stats["tiles_scored"] = scored
+                stats["tiles_passed"] = passed
             finally:
                 state.close()
 
@@ -272,8 +275,7 @@ def run_pipeline(
     # Summary
     logger.info("=== LUCID Pipeline Summary ===")
     logger.info("Sources processed: %d", stats["sources_processed"])
-    logger.info("Tiles passed ICNet scoring: %d", stats["tiles_scored"])
-    logger.info("Tiles passed clipiqa filtering: >= %.2f", clipiqa_threshold)
+    logger.info("Tiles passed ICNet scoring: %d", stats["tiles_passed"])
     logger.info("Unique tiles finalized: %d", stats["tiles_kept"])
 
     return stats

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from lucid.config import LucidConfig
 from lucid.pipeline import run_pipeline
 
 CALIB_DIR = Path("/home/phhofm/Documents/filteing_test/input")
@@ -21,7 +20,6 @@ def test_resume_does_not_duplicate_final_tiles(tmp_path):
     workspace = out / "workspace"
 
     # Pass 1: full pipeline
-    LucidConfig.reset()
     run_pipeline(
         input_dir=CALIB_DIR,
         output_dir=out,
@@ -29,6 +27,7 @@ def test_resume_does_not_duplicate_final_tiles(tmp_path):
         model_path=None,
         tile_size=128,
         threshold=0.45,
+        clipiqa_threshold=0.0,
         dedupe_threshold=0.96,
         batch_size=0,
         workers=2,
@@ -46,7 +45,6 @@ def test_resume_does_not_duplicate_final_tiles(tmp_path):
     assert len(first_tiles) == len(set(first_tiles))
 
     # Pass 2: re-run with --resume (default; non-dry, no stage)
-    LucidConfig.reset()
     run_pipeline(
         input_dir=CALIB_DIR,
         output_dir=out,
@@ -54,6 +52,7 @@ def test_resume_does_not_duplicate_final_tiles(tmp_path):
         model_path=None,
         tile_size=128,
         threshold=0.45,
+        clipiqa_threshold=0.0,
         dedupe_threshold=0.96,
         batch_size=0,
         workers=2,
@@ -82,7 +81,6 @@ def test_resume_dedupe_stage_only(tmp_path):
     workspace = out / "workspace"
 
     # Ingest only
-    LucidConfig.reset()
     run_pipeline(
         input_dir=CALIB_DIR,
         output_dir=out,
@@ -90,6 +88,7 @@ def test_resume_dedupe_stage_only(tmp_path):
         model_path=None,
         tile_size=128,
         threshold=0.45,
+        clipiqa_threshold=0.0,
         dedupe_threshold=0.96,
         batch_size=0,
         workers=2,
@@ -105,7 +104,6 @@ def test_resume_dedupe_stage_only(tmp_path):
     assert (workspace / "scored").exists()
 
     # Now just dedupe
-    LucidConfig.reset()
     run_pipeline(
         input_dir=CALIB_DIR,
         output_dir=out,
@@ -113,6 +111,7 @@ def test_resume_dedupe_stage_only(tmp_path):
         model_path=None,
         tile_size=128,
         threshold=0.45,
+        clipiqa_threshold=0.0,
         dedupe_threshold=0.96,
         batch_size=0,
         workers=2,
@@ -139,7 +138,6 @@ def test_state_db_persists_across_runs(tmp_path):
     workspace = out / "workspace"
 
     # Ingest only
-    LucidConfig.reset()
     run_pipeline(
         input_dir=CALIB_DIR,
         output_dir=out,
@@ -147,6 +145,7 @@ def test_state_db_persists_across_runs(tmp_path):
         model_path=None,
         tile_size=128,
         threshold=0.45,
+        clipiqa_threshold=0.0,
         dedupe_threshold=0.96,
         batch_size=0,
         workers=2,

@@ -1,13 +1,12 @@
 """Entry point for the ``lucid-calibrate`` console script.
 
-Wraps ``scripts/calibrate_icnet.py`` so users can run ``lucid-calibrate
+Wraps ``lucid/scripts/calibrate_icnet.py`` so users can run ``lucid-calibrate
 --input <folder>`` after ``pip install lucid-sisr``. The wrapper:
 
 - Forwards all CLI flags through to the script
 - Defaults ``--output`` to the installed ``lucid/resources/icnet_calibration.json``
   so a fresh run overwrites the shipped calibration in place
-- Falls back to a self-contained report if the ``scripts/`` directory is
-  not available (e.g. slim wheel install)
+- Falls back to a self-contained report if the script is not available
 """
 from __future__ import annotations
 
@@ -17,11 +16,8 @@ from pathlib import Path
 
 def main() -> int:
     pkg_root = Path(__file__).resolve().parent
-    # Wheel installs ship the script at lucid/scripts/calibrate_icnet.py.
-    # Repo / editable installs use the top-level scripts/ directory.
     candidates = [
         pkg_root / "scripts" / "calibrate_icnet.py",
-        pkg_root.parent / "scripts" / "calibrate_icnet.py",
     ]
     script_path = next((c for c in candidates if c.exists()), None)
     if script_path is None:

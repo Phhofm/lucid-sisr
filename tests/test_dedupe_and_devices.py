@@ -131,3 +131,35 @@ def test_brute_force_max_sims_identical_vector():
     sims = dedupe._brute_force_max_sims(v, pool)
     assert sims.shape == (1,)
     assert float(sims[0]) > 0.99
+
+
+@pytest.mark.skipif(
+    not dedupe.hnswlib_available(),
+    reason="hnswlib not installed; skip HNSW-specific tests",
+)
+def test_hnsw_index_grow_preserves_vectors():
+    """T3: After an index grows, vectors added before the grow are still found.
+
+    Regression test: the old _grow implementation rebuilt the index from scratch,
+    losing all previously added vectors. This test verifies the fixed version
+    uses resize_index() which preserves all items.
+    """
+    idx = dedupe._HNSWIndex(max_elements=4)
+    rng = np.random.default_rng(seed=42)
+
+    # Add 4 vectors - this is within initial capacity
+    first_batch = rng.normal(size=(4, dedupe.FEATURE_DIM)).astype(np.float32)
+    first_batch /= np.linalg.norm(first_batch, axis=1, keepdims=True)
+    idx.add(first_batch)
+
+    # Save one of the first vectors for later query
+    query_vec = first_batch[0:1].copy()
+
+    # Add more vectors to trigger a grow
+    second_batch = rng.normal(size=(4, dedupe.FEATURE_DIM)).astype(np.float32)
+    second_batch /= np.linalg.norm(second_batch, axis=1, keepdims=True)
+    idx.add(second_batch)
+
+    # Query with the first vector - should still find it with high similarity
+    sims = idx.max_cosine_similarity(query_vec)
+    assert sims[0] > 0.99, f"Expected high similarity after grow, got {sims[0]}"

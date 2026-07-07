@@ -119,44 +119,15 @@ class _HNSWIndex:
         return (1.0 - distances[:, 0]).astype(np.float32)
 
     def _grow(self, needed: int) -> None:
-        """Double the index capacity and rebuild from existing items."""
+        """Grow the index capacity in place, preserving all stored items."""
         new_cap = max(needed, self._max_elements * 2)
-        logger.warning(
-            "HNSW dedupe index hit capacity %d (needed %d); "
-            "rebuilding with %d. Memory cost will rise briefly.",
+        logger.info(
+            "HNSW dedupe index growing from %d to %d elements.",
             self._max_elements,
-            needed,
             new_cap,
         )
-        old = self._index
-        rebuilt = hnswlib.Index(space="cosine", dim=FEATURE_DIM)
-        rebuilt.init_index(
-            max_elements=new_cap,
-            ef_construction=_HNSW_EF_CONSTRUCTION,
-            M=_HNSW_M,
-        )
-        rebuilt.set_ef(_HNSW_EF_QUERY)
-        if self._size > 0:
-            # Re-add by id: the old index still has its items under the
-            # original contiguous ids, so re-inserting the same ids is
-            # idempotent for our purposes (we only ever call max_cosine_similarity).
-            rebuilt.add_items(
-                np.zeros((1, FEATURE_DIM), dtype=np.float32),
-                np.array([0], dtype=np.int64),
-            )
-            # hnswlib has no `copy_from`, so we re-embed everything by
-            # storing a backup tensor in the wrapper when full rebuilds
-            # matter. For now, we keep this rare path simple: rebuild
-            # and accept that items 1..size are lost. This is only hit
-            # when the user dramatically under-estimated pool size.
-            self._index = rebuilt
-            self._max_elements = new_cap
-            self._size = 0
-            self._next_id = 0
-        else:
-            self._index = rebuilt
-            self._max_elements = new_cap
-        del old
+        self._index.resize_index(new_cap)
+        self._max_elements = new_cap
 
 
 def _brute_force_max_sims(
@@ -186,7 +157,7 @@ def run_dedupe(
         io_throttle: Seconds to sleep between batches (helps on slow USB drives).
 
     Returns:
-        ``(kept_count, removed_count)`` tuple.
+        ``(kept_count, removed_count)``; unreadable/oversized tiles are excluded from both.
     """
     from lucid.resources import resolve_device
 
@@ -194,7 +165,9 @@ def run_dedupe(
     model = _get_feature_extractor(device)
     preprocess = _preload_transform()
 
-    tile_paths = list(input_dir.rglob("*.png"))
+    tile_paths = sorted(
+        p for p in input_dir.rglob("*.png") if "redundant" not in p.parts
+    )
     logger.info("Found %d tiles to dedupe on %s", len(tile_paths), device)
 
     use_hnsw = _HNSW_AVAILABLE
@@ -217,6 +190,7 @@ def run_dedupe(
 
     redundant_dir = input_dir / "redundant"
 
+    processed = 0
     for i in tqdm(range(0, len(tile_paths), batch_size), desc="Auditing diversity"):
         batch = tile_paths[i : i + batch_size]
         if not batch:
@@ -233,11 +207,13 @@ def run_dedupe(
                         continue
                     tensors.append(preprocess(im.convert("RGB")))
                     valid.append(p)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Skipping unreadable tile %s: %s", p, exc)
 
         if not tensors:
             continue
+
+        processed += len(valid)
 
         feat = torch.stack(tensors).to(device)
         with torch.no_grad():
@@ -293,7 +269,14 @@ def run_dedupe(
                     rename_counters[base] += 1
                     dest = redundant_dir / f"{base}_{rename_counters[base]}.png"
                 shutil.move(str(p), str(dest))
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("Could not move duplicate %s: %s", p, exc)
 
-    return len(tile_paths) - len(redundant), len(redundant)
+    skipped = len(tile_paths) - processed
+    if skipped > 0:
+        logger.warning(
+            "%d tiles could not be read or exceeded %dpx and were left in place "
+            "(not counted as kept).", skipped, MAX_IMAGE_DIM
+        )
+
+    return processed - len(redundant), len(redundant)
