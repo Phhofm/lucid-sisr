@@ -4,6 +4,33 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [3.1.1] - 2026-10-21
+
+### Fixed
+- Dedupe: duplicates processed inside the same batch no longer escape the
+  audit; comparisons now stream per tile against everything accepted so far
+- `tiles_scored` summary stat was never populated (always 0)
+
+### Changed
+- **Blockiness rewritten** as the normalized boundary/interior gradient ratio
+  (Wang-style). The old unnormalized sum could not detect JPEG artifacts at
+  all (even a Q30 re-encode scored <6 against the 45.0 cutoff). New gate:
+  `blockiness_max = 1.7`; clean content measures ~1.0–1.4, JPEG flats ~2.0.
+- **Aliasing ratio windowed** with a Hann window before the FFT. The
+  unwindowed ring was dominated by tile-boundary leakage and rejected ordinary
+  sharp natural content. New gate: `aliasing_max = 0.40` — rejects broadband
+  HF clutter (UI/text/screen tiles, ringing), keeps clean textures.
+- **CLIP-IQA is now opt-in** (`--clipiqa-threshold`, default 0.0). A
+  perceptual metric silently gating on install state made runs
+  non-reproducible; the enabled gate set is recorded in
+  `workspace/scored/threshold_used.txt`.
+- E2E test suite is hermetic (synthetic fixtures, no external input folder).
+
+### Added
+- `--trim-bottom N`: percentile prune dropping the lowest-complexity N% of
+  tiles at the dedupe stage (BHI finding: removing only the worst tiles beats
+  keeping only the best). Trimmed tiles are moved to `scored/redundant/`.
+
 ## [3.1.0] - 2026-07-07
 
 ### Fixed

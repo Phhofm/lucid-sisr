@@ -18,9 +18,6 @@ import torch.multiprocessing as mp
 
 from lucid.pipeline import run_pipeline
 
-# Threshold is read from args, but auto-resolved in run_pipeline if None
-_SILENT_THRESHOLD = None
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -163,11 +160,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--clipiqa-threshold",
         type=float,
-        default=0.3,
+        default=0.0,
         help=(
             "Minimum CLIP-IQA quality score (0.0-1.0) for artifact filtering. "
-            "Removes ringing/haloring and low-quality tiles. "
-            "Set to 0.0 or pass --no-clipiqa to disable. Default: 0.3"
+            "Perceptual metric: opt-in so runs stay reproducible without "
+            "pyiqa. Requires `pip install lucid-sisr[clipiqa]`."
         ),
     )
     parser.add_argument(
@@ -175,7 +172,17 @@ def build_parser() -> argparse.ArgumentParser:
         dest="clipiqa_threshold",
         action="store_const",
         const=0.0,
-        help="Disable CLIP-IQA quality filtering",
+        help="Disable CLIP-IQA quality filtering (also the default)",
+    )
+    parser.add_argument(
+        "--trim-bottom",
+        type=int,
+        default=0,
+        help=(
+            "Drop the lowest-complexity N%% of tiles at the dedupe stage "
+            "(0 = off). BHI finding: removing only the worst tiles beats "
+            "keeping only the best."
+        ),
     )
     return parser
 
@@ -249,6 +256,7 @@ def main() -> int:
             threshold=threshold,
             clipiqa_threshold=args.clipiqa_threshold,
             dedupe_threshold=args.dedupe_threshold,
+            trim_bottom=args.trim_bottom,
             batch_size=args.batch,
             workers=args.workers,
             max_vram_gb=args.max_vram_gb,

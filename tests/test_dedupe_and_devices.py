@@ -133,6 +133,77 @@ def test_brute_force_max_sims_identical_vector():
     assert float(sims[0]) > 0.99
 
 
+def _sine_tile(freq: float, amp: float = 60.0) -> np.ndarray:
+    """Deterministic structured tile; distinct freqs are far apart in
+    ResNet feature space, keeping dedupe tests off the 0.96 boundary."""
+    x = np.arange(64)
+    tile = np.clip(128 + amp * np.sin(x * freq)[None, :], 0, 255).astype(np.uint8)
+    return np.repeat(tile, 64, axis=0)
+
+
+def test_run_dedupe_trim_bottom_drops_lowest_scoring(tmp_path):
+    """``trim_bottom`` must drop the lowest-complexity percentile of the
+    surviving tiles, using the scores CSV, before similarity auditing.
+
+    BHI finding: removing only the worst tiles beats keeping only the
+    best; this is the percentile prune for it.
+    """
+    import csv as _csv
+
+    import cv2
+
+    csv_path = tmp_path / "scores.csv"
+    with open(csv_path, "w", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(
+            ["tile_name", "complexity_score", "score_calibrated", "calibration_outlier", "source", "source_image"]
+        )
+        for i in range(10):
+            score = i / 10
+            w.writerow([f"t{i}.png", f"{score}", f"{score}", "0", "", ""])
+
+    # Structured, mutually distinct tiles: only the trim rule decides
+    for i in range(10):
+        cv2.imwrite(str(tmp_path / f"t{i}.png"), _sine_tile(0.5 + 0.1 * i))
+
+    kept, removed = dedupe.run_dedupe(
+        input_dir=tmp_path,
+        threshold=0.9999,
+        batch_size=32,
+        device_preference="cpu",
+        scores_csv=csv_path,
+        trim_bottom=20,
+    )
+    assert (kept, removed) == (8, 2)
+    # The two lowest-complexity tiles (score 0.0 and 0.1) are the ones trimmed
+    assert (tmp_path / "redundant" / "t0.png").exists()
+    assert (tmp_path / "redundant" / "t1.png").exists()
+    assert not (tmp_path / "t0.png").exists()
+
+
+def test_run_dedupe_flags_duplicates_inside_same_batch(tmp_path):
+    """Two byte-identical tiles landing in one batch must collapse to one keeper.
+
+    Regression: max similarities were computed once per batch *before* the
+    add-loop, so duplicates processed together in the same batch never saw
+    each other and both survived. Comparisons must stream against the pool
+    as it grows.
+    """
+    import cv2
+
+    base = _sine_tile(0.5)
+    cv2.imwrite(str(tmp_path / "a.png"), base)
+    cv2.imwrite(str(tmp_path / "b.png"), base)  # byte-identical
+    cv2.imwrite(str(tmp_path / "c.png"), _sine_tile(1.1))
+    cv2.imwrite(str(tmp_path / "d.png"), _sine_tile(1.7))
+
+    kept, removed = dedupe.run_dedupe(
+        input_dir=tmp_path, threshold=0.9999, batch_size=32, device_preference="cpu"
+    )
+    assert (kept, removed) == (3, 1)
+    assert (tmp_path / "redundant" / "b.png").exists()
+
+
 @pytest.mark.skipif(
     not dedupe.hnswlib_available(),
     reason="hnswlib not installed; skip HNSW-specific tests",

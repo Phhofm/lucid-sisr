@@ -143,10 +143,12 @@ After successful completion, a `lucid_workspace_<input-name>/` scratch folder is
 | `--no-calibrate` | off | Disable the calibration transform. Use raw ICNet scores for the threshold comparison. Default: enabled. |
 | `--threshold FLOAT` | `0.45` | Minimum ICNet complexity score (0.0–1.0) |
 | `--dedupe-threshold FLOAT` | `0.96` | Cosine similarity above which tiles are considered duplicates |
+| `--trim-bottom INT` | `0` | Drop the lowest-complexity N% of tiles at the dedupe stage (0 = off). BHI finding: removing only the worst tiles beats keeping only the best |
 | `--workers INT` | `cpu_count - 2` | Parallel CPU workers for tile extraction |
 | `--batch INT` | `auto` | GPU batch size for ICNet scoring (0 = auto-detect from VRAM) |
 | `--max-vram-gb FLOAT` | `0.0` | Cap VRAM usage in GB (0 = use all available) |
-| `--multiscale` | *(off)* | Tile at 1.0×, 0.75×, 0.5×, 0.25× scales |
+| `--multiscale` | *(on)* | Tile at 1.0×, 0.75×, 0.5×, 0.25× scales; pass `--no-multiscale` to disable |
+| `--clipiqa-threshold FLOAT` | `0.0` (off) | Opt-in CLIP-IQA perceptual gate; removes ringing/haloring tiles. Requires `pip install lucid-sisr[clipiqa]` |
 | `--io-throttle-ms FLOAT` | `auto` | ms sleep between disk writes (auto-detects USB drives) |
 | `--strict` | *(off)* | Abort on the first corrupt/unreadable image |
 | `--resume` | *(off)* | Continue a previous run from the workspace state DB |
@@ -266,9 +268,9 @@ Each source image is loaded, validated for corruption, and split into tiles. Til
 | Entropy | ≥ 5.2 bits | Flat/empty regions |
 | Laplacian variance | 80–10,000 | Blur or oversharpening |
 | Gradient energy | ≥ 0.70 | Lack of texture |
-| Blockiness | ≤ 45.0 | JPEG compression artifacts |
+| Blockiness (boundary/interior gradient ratio) | ≤ 1.7 | JPEG compression artifacts |
 | Noise ratio | ≤ 0.65 | Sensor/compression noise |
-| Aliasing ratio | ≤ 0.65 | Edge-enhancement halos |
+| Aliasing ratio (Hann-windowed ring energy) | ≤ 0.40 | HF clutter: stripes, UI patterns, ringing |
 
 **Tier 2 — ICNet Complexity (GPU):**  
 Tiles that pass signal filters are scored by a pre-trained ICNet model (two ResNet-18 branches: detail + context). The model outputs a per-pixel complexity map and a scalar score. Tiles below `--threshold` (default 0.45) are discarded.

@@ -1,7 +1,21 @@
 """Unit tests for signal metrics."""
+import cv2
 import numpy as np
 
-from lucid.core.metrics import THRESHOLDS, measure_all
+from lucid.core.metrics import THRESHOLDS, aliasing_ratio, blockiness, measure_all
+
+
+def _natural_image() -> np.ndarray:
+    """Deterministic smooth-textured gray image ("photo-like")."""
+    rng = np.random.default_rng(0)
+    small = rng.integers(0, 256, (64, 64), dtype=np.uint8)
+    return cv2.resize(small, (512, 512), interpolation=cv2.INTER_CUBIC)
+
+
+def _jpeg(gray: np.ndarray, quality: int) -> np.ndarray:
+    ok, enc = cv2.imencode(".jpg", gray, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    assert ok
+    return cv2.imdecode(enc, cv2.IMREAD_GRAYSCALE)
 
 
 def test_uniform_tile_fails():
@@ -36,6 +50,93 @@ def test_gradient_tile_passes():
     metrics, passes = measure_all(gray)
     assert len(metrics) == 6
     assert passes, "Textured tile should pass all signal filters"
+
+
+def test_blockiness_flat_jpeg_rejected_clean_kept():
+    """JPEG blockiness must fire on artifact-carrying flats and never on clean ones.
+
+    A Q30 re-encode of a smooth photo injects 8x8 boundary artifacts
+    (ratio ~2.0 in initial tuning); the clean original sits near ~1.0.
+    The pre-rewrite implementation could not separate these at all (all
+    values < 6 against a threshold of 45), so this pins the fix.
+    """
+    flat = cv2.blur(_natural_image(), (31, 31)).astype(np.uint8)
+    flat_jq30 = _jpeg(flat, 30)
+    assert blockiness(flat) < THRESHOLDS["blockiness_max"]
+    assert blockiness(flat_jq30) > THRESHOLDS["blockiness_max"]
+
+
+def test_blockiness_dense_texture_misfire_fixed():
+    """Dense high-contrast texture must not be read as blockiness.
+
+    Unnormalized boundary-diff sums reject dense-but-clean textures
+    (any sharp image). The normalized (boundary / interior) ratio must
+    sit near 1.0 for content whose block-boundary gradient matches its
+    interior gradient.
+    """
+    x = np.arange(512, dtype=np.float32)
+    dense = (
+        np.sin(x * 0.8)[None, :] * 60
+        + np.sin(x * 0.5)[:, None] * 40
+        + 128
+    ).clip(0, 255).astype(np.uint8)
+    assert abs(blockiness(dense) - 1.0) < 0.5
+
+
+def test_blockiness_jpeg_reencode_raises_metric():
+    """A Q30 re-encode of the same image must score above its clean original."""
+    nat = _natural_image()
+    assert blockiness(_jpeg(nat, 30)) > blockiness(nat)
+
+
+def test_aliasing_natural_and_sharpened_within_gate():
+    """Sharp natural images (even unsharpened) stay below the aliasing gate."""
+    nat = _natural_image()
+    sharp = np.clip(
+        nat.astype(np.float32)
+        + 3.0 * (nat.astype(np.float32) - cv2.GaussianBlur(nat, (5, 5), 0)),
+        0, 255,
+    ).astype(np.uint8)
+    for img in (nat, sharp, cv2.blur(nat, (31, 31)).astype(np.uint8)):
+        assert aliasing_ratio(img) < THRESHOLDS["aliasing_max"], img[0, 0]
+
+
+def test_aliasing_sharpening_raises_metric():
+    """Unsharpen masking must increase the ring-energy ratio."""
+    nat = _natural_image()
+    sharp = np.clip(
+        nat.astype(np.float32)
+        + 3.0 * (nat.astype(np.float32) - cv2.GaussianBlur(nat, (5, 5), 0)),
+        0, 255,
+    ).astype(np.uint8)
+    assert aliasing_ratio(sharp) > aliasing_ratio(nat)
+
+
+def test_aliasing_clean_periodic_texture_within_gate():
+    """Clean periodic texture is legitimate GT content and must be kept."""
+    x = np.arange(512)
+    grid = (
+        np.sin(x * 1.8)[None, :] * 60 + np.sin(x * 1.8)[:, None] * 60 + 128
+    ).clip(0, 255).astype(np.uint8)
+    assert aliasing_ratio(grid) < THRESHOLDS["aliasing_max"]
+
+
+def test_aliasing_broadband_clutter_rejected():
+    """Pixel-scale broadband clutter (HF noise over texture) must trip the gate.
+
+    Signature of UI screenshots, text fragments, and ringing/noise
+    overlays: energy spread across the whole high-frequency ring, unlike
+    clean periodic texture.
+    """
+    x = np.arange(512)
+    rng = np.random.default_rng(7)
+    clutter = (
+        np.sin(x * 0.8)[None, :] * 60
+        + np.sin(x * 0.5)[:, None] * 40
+        + rng.integers(-10, 10, (512, 512))
+        + 128
+    ).clip(0, 255).astype(np.uint8)
+    assert aliasing_ratio(clutter) > THRESHOLDS["aliasing_max"]
 
 
 def test_thresholds_exist():

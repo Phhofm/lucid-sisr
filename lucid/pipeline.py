@@ -41,6 +41,7 @@ def run_pipeline(
     dry_run: bool,
     cleanup: bool = False,
     calibrate: bool = True,
+    trim_bottom: int = 0,
 ) -> dict[str, int]:
     """Run the complete LUCID pipeline or a specific stage.
 
@@ -66,6 +67,10 @@ def run_pipeline(
         stage: Run a specific stage only (all, ingest, dedupe, finalize).
         dry_run: Validate inputs and estimate disk usage without writing tiles.
         cleanup: Remove workspace directory after successful completion.
+        calibrate: Apply calibration curve to ICNet scores.
+        trim_bottom: Drop the lowest-complexity N% of tiles at the dedupe
+            stage (0 = off). BHI finding: removing only the worst tiles
+            beats keeping only the best. Applied via the scores CSV.
 
     Returns:
         dict with summary stats: sources_processed, tiles_scored, tiles_passed, tiles_kept.
@@ -172,7 +177,7 @@ def run_pipeline(
             state = PipelineState(workspace)
             state.connect()
             try:
-                sources, passed = filtering.run_ingest(
+                sources, scored, passed = filtering.run_ingest(
                     state=state,
                     workspace=workspace,
                     input_dir=input_dir,
@@ -190,6 +195,7 @@ def run_pipeline(
                     io_throttle_sec=io_throttle_sec,
                 )
                 stats["sources_processed"] = sources
+                stats["tiles_scored"] = scored
                 stats["tiles_passed"] = passed
             finally:
                 state.close()
@@ -236,6 +242,8 @@ def run_pipeline(
                     threshold=dedupe_threshold,
                     batch_size=batch_size,
                     io_throttle=io_throttle_sec,
+                    scores_csv=workspace / "scores" / "ingest_scores.csv",
+                    trim_bottom=trim_bottom,
                 )
                 stats["tiles_kept"] = kept
                 logger.info("Dedupe: kept %d, removed %d", kept, removed)

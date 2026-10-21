@@ -13,6 +13,7 @@ acceptable for datasets up to a few hundred thousand tiles.
 """
 from __future__ import annotations
 
+import csv
 import gc
 import logging
 import shutil
@@ -140,12 +141,53 @@ def _brute_force_max_sims(
     return sims.max(dim=1).values
 
 
+def _trim_bottom(
+    tile_paths: list[Path], scores_csv: Path, pct: int, dest_dir: Path
+) -> tuple[list[Path], int]:
+    """Move the lowest-complexity ``pct``% of tiles to ``dest_dir``.
+
+    BHI finding: removing only the worst tiles (bottom percentile by
+    complexity) beats keeping only the best. Tiles missing from the CSV
+    are kept. A missing CSV disables the trim.
+
+    Returns:
+        (remaining_tile_paths, moved_count).
+    """
+    if pct <= 0:
+        return tile_paths, 0
+    try:
+        with open(scores_csv, newline="") as f:
+            scores = {
+                row["tile_name"]: float(row["score_calibrated"])
+                for row in csv.DictReader(f)
+            }
+    except FileNotFoundError:
+        logger.warning("trim_bottom: %s not found; skipping percentile trim", scores_csv)
+        return tile_paths, 0
+
+    ranked = sorted(
+        tile_paths, key=lambda p: scores.get(p.name, float("inf"))
+    )
+    n_drop = min(len(ranked), len(ranked) * pct // 100)
+    dest_dir.mkdir(exist_ok=True)
+    for p in ranked[:n_drop]:
+        try:
+            shutil.move(str(p), str(dest_dir / p.name))
+        except OSError as exc:
+            logger.warning("trim_bottom: could not move %s: %s", p, exc)
+    moved = [p for p in ranked[:n_drop] if not p.exists()]
+    logger.info("trim_bottom: dropped %d lowest-complexity tiles", len(moved))
+    return ranked[n_drop:], len(moved)
+
+
 def run_dedupe(
     input_dir: Path,
     threshold: float,
     batch_size: int,
     device_preference: str = "auto",
     io_throttle: float = 0.0,
+    scores_csv: Path | None = None,
+    trim_bottom: int = 0,
 ) -> tuple[int, int]:
     """Run deduplication on a folder of tiles.
 
@@ -155,9 +197,16 @@ def run_dedupe(
         batch_size: Number of tiles to process per GPU inference pass.
         device_preference: ``"auto"``, ``"cuda"``, ``"xpu"``, ``"mps"``, or ``"cpu"``.
         io_throttle: Seconds to sleep between batches (helps on slow USB drives).
+        scores_csv: Ingest scores CSV used by ``trim_bottom``.
+        trim_bottom: Drop the lowest-complexity N% of tiles first (0 = off).
+
+    Note:
+        Comparison streams per tile: each tile is matched against all
+        tiles accepted so far, including earlier tiles of its own batch.
 
     Returns:
-        ``(kept_count, removed_count)``; unreadable/oversized tiles are excluded from both.
+        ``(kept_count, removed_count)``; trimmed and unreadable/oversized
+        tiles are excluded from both.
     """
     from lucid.resources import resolve_device
 
@@ -167,6 +216,11 @@ def run_dedupe(
 
     tile_paths = sorted(
         p for p in input_dir.rglob("*.png") if "redundant" not in p.parts
+    )
+
+    redundant_dir = input_dir / "redundant"
+    tile_paths, trimmed = _trim_bottom(
+        tile_paths, scores_csv, trim_bottom, redundant_dir
     )
     logger.info("Found %d tiles to dedupe on %s", len(tile_paths), device)
 
@@ -187,8 +241,6 @@ def run_dedupe(
         hnsw_index = _HNSWIndex(
             max_elements=min(max(len(tile_paths) * 2, 100_000), 10_000_000)
         )
-
-    redundant_dir = input_dir / "redundant"
 
     processed = 0
     for i in tqdm(range(0, len(tile_paths), batch_size), desc="Auditing diversity"):
@@ -222,33 +274,27 @@ def run_dedupe(
                 features = features.unsqueeze(0)
             features = nn.functional.normalize(features, p=2, dim=1)
 
-            if hnsw_index is not None:
-                # Move features to CPU once; HNSW index is CPU-only.
-                features_cpu = features.detach().cpu().numpy().astype(np.float32)
-                max_sims_np = hnsw_index.max_cosine_similarity(features_cpu)
-                max_sims = torch.from_numpy(max_sims_np).to(device)
-            else:
-                max_sims = _brute_force_max_sims(features, unique_pool)
-
-            for idx, sim in enumerate(max_sims):
+            # Stream: each tile is compared against everything accepted so
+            # far (including earlier tiles of this batch), so duplicates
+            # processed together still see each other.
+            for idx in range(features.size(0)):
                 p = valid[idx]
-                if float(sim) > threshold:
-                    redundant.append(p)
-                else:
-                    if hnsw_index is not None:
-                        hnsw_index.add(features_cpu[idx : idx + 1])
+                f = features[idx].unsqueeze(0)
+                if hnsw_index is not None:
+                    f_cpu = f.detach().cpu().numpy().astype(np.float32)
+                    max_sim = float(hnsw_index.max_cosine_similarity(f_cpu)[0])
+                    if max_sim > threshold:
+                        redundant.append(p)
                     else:
-                        unique_pool = torch.cat(
-                            [unique_pool, features[idx].unsqueeze(0)], dim=0
-                        )
+                        hnsw_index.add(f_cpu)
+                else:
+                    max_sim = float(_brute_force_max_sims(f, unique_pool)[0])
+                    if max_sim > threshold:
+                        redundant.append(p)
+                    else:
+                        unique_pool = torch.cat([unique_pool, f], dim=0)
 
         del tensors, feat, features
-        if "features_cpu" in locals():
-            del features_cpu
-        try:
-            del max_sims
-        except NameError:
-            pass
         if device.startswith("cuda") and torch.cuda.is_available():
             torch.cuda.empty_cache()
         gc.collect()
@@ -279,4 +325,4 @@ def run_dedupe(
             "(not counted as kept).", skipped, MAX_IMAGE_DIM
         )
 
-    return processed - len(redundant), len(redundant)
+    return processed - len(redundant), len(redundant) + trimmed

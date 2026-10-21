@@ -18,8 +18,12 @@ THRESHOLDS = {
     "entropy_min": 5.2,  # Slightly relaxed for 512px context
     "lap_var_min": 80.0,
     "lap_var_max": 10000.0,
-    "blockiness_max": 45.0,
-    "aliasing_max": 0.65,
+    # blockiness is a normalized ratio (boundary vs interior gradient),
+    # ~1.0 for clean content; Q30 JPEG flats measure ~2.0
+    "blockiness_max": 1.7,
+    # Hann-windowed ring-energy ratio; stripes/UI patterns ~0.8,
+    # sharp natural content < 0.15
+    "aliasing_max": 0.40,
     "grad_energy_min": 0.70,
     "noise_ratio_max": 0.65,
 }
@@ -98,58 +102,61 @@ def laplacian_variance(gray: np.ndarray) -> float:
 
 
 def blockiness(gray: np.ndarray) -> float:
-    """Detect compression blockiness artifacts.
+    """Detect JPEG 8x8 blockiness artifacts.
 
-    Measures vertical and horizontal differences at block boundaries (every 8 pixels).
-    High values indicate JPEG compression artifacts detrimental to SR training.
+    Compares the mean gradient across JPEG block boundaries (every 8 px)
+    against the mean interior gradient. Ratios near 1.0 mean boundary
+    discontinuities match natural content; JPEG blocks push the boundary
+    mean above the interior mean, especially in flat regions.
 
     Args:
         gray: Grayscale image as numpy array.
 
     Returns:
-        Normalized blockiness score (0 = no blocks, higher = more artifacts).
+        Boundary/interior gradient ratio (1.0 = no block artifacts).
     """
     h, w = gray.shape
     if h < 16 or w < 16:
         return 0.0
 
-    # Compare columns at block boundaries (8px spacing for JPEG blocks)
-    v_right, v_left = gray[:, 8::8], gray[:, 7::8]
-    v_len = min(v_right.shape[1], v_left.shape[1])
-    v_score = np.sum(
-        np.abs(v_right[:, :v_len].astype(np.int16) - v_left[:, :v_len].astype(np.int16))
-    )
+    g = gray.astype(np.int16)
 
-    # Compare rows at block boundaries
-    h_bottom, h_top = gray[8::8, :], gray[7::8, :]
-    h_len = min(h_bottom.shape[0], h_top.shape[0])
-    h_score = np.sum(
-        np.abs(h_bottom[:h_len, :].astype(np.int16) - h_top[:h_len, :].astype(np.int16))
-    )
+    # Adjacent-difference fields; JPEG boundary pairs sit at 7|8 offsets.
+    dv = np.abs(g[:, 1:] - g[:, :-1]).astype(np.float64)
+    dh = np.abs(g[1:, :] - g[:-1, :]).astype(np.float64)
+    v_mask = np.zeros(dv.shape[1], dtype=bool)
+    v_mask[7::8] = True
+    h_mask = np.zeros(dh.shape[0], dtype=bool)
+    h_mask[7::8] = True
 
-    return float(v_score + h_score) / (h * w)
+    boundary = (dv[:, v_mask].mean() + dh[h_mask, :].mean()) / 2.0
+    interior = (dv[:, ~v_mask].mean() + dh[~h_mask, :].mean()) / 2.0
+    return float((boundary + 1.0) / (interior + 1.0))
 
 
 def aliasing_ratio(gray: np.ndarray) -> float:
-    """Detect aliasing/oversharpening via frequency analysis.
+    """Detect high-frequency pollution via windowed frequency analysis.
 
-    High values in the outer frequency ring indicate edge enhancement artifacts
-    (halos, ringing) that are too sharp for natural image learning.
+    Stripes, UI text/layout patterns, ringing, and heavy sharpening put
+    energy in the outer frequency ring. A Hann window suppresses the
+    tile-boundary discontinuity leakage that made the unwindowed version
+    reject ordinary sharp natural content.
 
     Args:
         gray: Grayscale image as numpy array.
 
     Returns:
-        Ratio of outer ring magnitude to total (higher = more aliasing).
+        Ratio of outer ring magnitude to total (higher = more pollution).
     """
-    f = np.fft.fftshift(np.fft.fft2(gray))
-    mag = np.abs(f)
     h, w = gray.shape
+    windowed = gray.astype(np.float64) * np.outer(np.hanning(h), np.hanning(w))
+    f = np.fft.fftshift(np.fft.fft2(windowed))
+    mag = np.abs(f)
     cy, cx = h // 2, w // 2
     y_grid, x_grid = np.ogrid[:h, :w]
     r = int(min(h // 2, w // 2) * 0.75)
 
-    # Mask for outer frequency ring (high frequencies = oversharpening)
+    # Mask for outer frequency ring
     mask = np.sqrt((x_grid - cx) ** 2 + (y_grid - cy) ** 2) >= r
     return float(mag[mask].mean() / (mag.mean() + 1e-9))
 

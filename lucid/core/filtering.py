@@ -49,7 +49,7 @@ def run_ingest(
     strict: bool = False,
     calibrate: bool = True,
     io_throttle_sec: float = 0.0,
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """Run the full ingest pipeline: signal filter -> ICNet score.
 
     Tile extraction runs in a ProcessPool (CPU-bound signal metrics) and
@@ -78,7 +78,7 @@ def run_ingest(
         io_throttle_sec: Seconds to sleep between disk writes (auto-detects USB).
 
     Returns:
-        (sources_processed, tiles_passed) for summary stats.
+        (sources_processed, tiles_scored, tiles_passed) for summary stats.
     """
     import shutil
 
@@ -266,6 +266,7 @@ def run_ingest(
             tile_size=tile_size,
             threshold=threshold,
             calibrate=calibrate,
+            clipiqa_threshold=clipiqa_threshold,
         )
 
     # Remove the empty stage dir if no per-image subfolders left
@@ -279,7 +280,7 @@ def run_ingest(
         logger.info("ICNet + CLIP-IQA scoring complete: %d/%d tiles passed (clipiqa >= %.2f)", tiles_passed, len(all_raw), clipiqa_threshold)
     else:
         logger.info("ICNet scoring complete: %d/%d tiles passed.", tiles_passed, len(all_raw))
-    return sources_processed, tiles_passed
+    return sources_processed, len(all_raw), tiles_passed
 
 
 def extract_tiles_to_staging(
@@ -649,14 +650,7 @@ def _score_staged_tiles(
         ctx.writer = writer
         for i in range(0, len(tile_paths), batch_size):
             chunk = tile_paths[i : i + batch_size]
-            items = []
-            for t in chunk:
-                arr = cv2.imread(str(t), cv2.IMREAD_COLOR)
-                if arr is None:
-                    continue
-                rgb = cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
-                items.append((t, rgb))
-            tp, rec = _score_batch(ctx, items, scores_csv, source_image=source_image)
+            tp, rec = _score_batch(ctx, _load_batch_items(chunk), scores_csv, source_image=source_image)
             tiles_passed_total += tp
             record["raw"].extend(rec["raw"])
             record["cal"].extend(rec["cal"])
@@ -676,6 +670,7 @@ def _write_score_artifacts(
     tile_size: int,
     threshold: float,
     calibrate: bool,
+    clipiqa_threshold: float = 0.0,
 ) -> None:
     """Tier 3.1 / 3.3 / 3.5: post-run summary artifacts.
 
@@ -753,6 +748,9 @@ def _write_score_artifacts(
             f"calibration_r_squared: {calibration_r_squared(tile_size):.4f}\n"
         )
         f.write(f"calibration_enabled: {calibrate}\n")
+        f.write(
+            f"clipiqa_gate: {'on (>= %.2f)' % clipiqa_threshold if clipiqa_threshold > 0 else 'off'}\n"
+        )
         f.write(f"tiles_scored: {n_total}\n")
         f.write(f"tiles_passing: {n_pass}\n")
         f.write(f"tiles_rejected: {n_rej}\n")

@@ -62,3 +62,6 @@ reports/*.sarif
 sonar.json
 # But keep the human-readable docs that are part of the repo's own audit trail
 !reports/*.md
+
+# Depwire local cache
+.depwire/

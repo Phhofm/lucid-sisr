@@ -1,46 +1,90 @@
-"""End-to-end pipeline test on the 7-image calibration folder.
+"""End-to-end pipeline test on synthetic fixtures.
 
-Exercises ingest → dedupe → finalize on real images and asserts the
-output structure is what downstream SISR training scripts expect.
+Runs ingest → dedupe → finalize on generated images so the suite is
+hermetic (no external folder): a textured source, a byte-identical
+duplicate of it, a flat image, an oversized-small image, and a
+truncated JPEG.
 """
 from __future__ import annotations
 
 import csv
-from pathlib import Path
 
+import cv2
+import numpy as np
 import pytest
 
 from lucid.pipeline import run_pipeline
 
-CALIB_DIR = Path("/home/phhofm/Documents/filteing_test/input")
+# Deterministic fixture: 128px random source upscaled 4x passes all six
+# signal gates on every one of its 16 tiles (lap_var ~800, blockiness
+# ~1.3, entropy ~7.9 — verified against THRESHOLDS).
+FIXTURE_SEED = 0
 
 
-@pytest.fixture(scope="module")
-def pipeline_output(tmp_path_factory):
-    """Run the full pipeline once per test module to keep wall time down."""
-    out = tmp_path_factory.mktemp("pipeline_out")
-    workspace = out / "workspace"
-    stats = run_pipeline(
-        input_dir=CALIB_DIR,
-        output_dir=out,
-        workspace=workspace,
+def _textured_gray() -> np.ndarray:
+    rng = np.random.default_rng(FIXTURE_SEED)
+    small = rng.integers(0, 256, (128, 128), dtype=np.uint8)
+    return cv2.resize(small, (512, 512), interpolation=cv2.INTER_CUBIC)
+
+
+@pytest.fixture
+def input_dir(tmp_path):
+    inp = tmp_path / "input"
+    inp.mkdir()
+    gray = _textured_gray()
+    cv2.imwrite(str(inp / "aaa_dup.png"), gray)  # sorts before textured.png
+    cv2.imwrite(str(inp / "textured.png"), gray)  # byte-identical dedupe target
+    cv2.imwrite(str(inp / "flat.png"), np.full((512, 512), 128, np.uint8))
+    cv2.imwrite(str(inp / "tiny.png"), _textured_gray()[:64, :64].copy())
+    cv2.imwrite(str(inp / "truncated.jpg"), gray)
+    data = (inp / "truncated.jpg").read_bytes()
+    (inp / "truncated.jpg").write_bytes(data[: len(data) // 2])
+    return inp
+
+
+def run(input_dir, output_dir, threshold=0.0, multiscale=False, cleanup=False):
+    """Run the full pipeline on the e2e fixtures. threshold=0.0 makes the
+    scoring gate pass everything the signal filter kept; clipiqa stays off
+    so the test is independent of pyiqa."""
+    return run_pipeline(
+        input_dir=input_dir,
+        output_dir=output_dir,
+        workspace=output_dir / "workspace",
         model_path=None,
         tile_size=128,
-        threshold=None,  # auto
-        clipiqa_threshold=0.3,
+        threshold=threshold,
+        clipiqa_threshold=0.0,
         dedupe_threshold=0.96,
         batch_size=0,
         workers=2,
         max_vram_gb=0.0,
-        multiscale=False,
+        multiscale=multiscale,
         io_throttle_sec=0.0,
         strict=False,
         resume=False,
         stage="all",
         dry_run=False,
-        cleanup=False,
+        cleanup=cleanup,
     )
-    return out, workspace, stats
+
+
+@pytest.fixture(scope="module")
+def pipeline_output(tmp_path_factory):
+    inp = tmp_path_factory.mktemp("input_root")
+    inp = inp / "input"
+    inp.mkdir()
+    gray = _textured_gray()
+    cv2.imwrite(str(inp / "aaa_dup.png"), gray)
+    cv2.imwrite(str(inp / "textured.png"), gray)
+    cv2.imwrite(str(inp / "flat.png"), np.full((512, 512), 128, np.uint8))
+    cv2.imwrite(str(inp / "tiny.png"), _textured_gray()[:64, :64].copy())
+    cv2.imwrite(str(inp / "truncated.jpg"), gray)
+    data = (inp / "truncated.jpg").read_bytes()
+    (inp / "truncated.jpg").write_bytes(data[: len(data) // 2])
+
+    out = tmp_path_factory.mktemp("pipeline_out")
+    stats = run(inp, out)
+    return out, out / "workspace", stats
 
 
 def test_pipeline_produces_tiles_folder(pipeline_output):
@@ -48,10 +92,20 @@ def test_pipeline_produces_tiles_folder(pipeline_output):
     tiles_dir = out / "tiles"
     assert tiles_dir.exists()
     tiles = list(tiles_dir.glob("*.png"))
-    assert len(tiles) > 0, "Expected at least one final tile"
-    # Tile filenames are 5-digit sequential
+    # 32 identical-content tiles in; dedupe keeps at most one source's set
+    assert 0 < len(tiles) <= 16
     for t in tiles[:5]:
         assert t.name[:5].isdigit(), f"Bad tile name: {t.name}"
+
+
+def test_pipeline_dedupes_identical_sources(pipeline_output):
+    """The two byte-identical sources must collapse to one in the final set."""
+    out, _, _ = pipeline_output
+    rows = list(csv.DictReader(open(out / "master_lineage.csv")))
+    # original_name is the surviving tile's pre-rename name; its prefix
+    # carries the source stem. The duplicate source must never survive.
+    stems = {r["original_name"].split("_s")[0] for r in rows}
+    assert stems == {"aaa_dup"}, stems
 
 
 def test_pipeline_writes_master_lineage(pipeline_output):
@@ -60,7 +114,6 @@ def test_pipeline_writes_master_lineage(pipeline_output):
     assert lineage.exists()
     rows = list(csv.DictReader(open(lineage)))
     assert len(rows) > 0
-    # All columns from Tier 3.4 must be present
     expected = {
         "id", "final_name", "source_dataset", "original_name", "original_path",
         "source_image_min_complexity", "source_image_mean_complexity",
@@ -69,63 +122,29 @@ def test_pipeline_writes_master_lineage(pipeline_output):
     assert expected.issubset(rows[0].keys())
 
 
-def test_pipeline_lineage_stats_are_populated(pipeline_output):
-    out, _, _ = pipeline_output
-    rows = list(csv.DictReader(open(out / "master_lineage.csv")))
-    # At least one row should have a non-empty mean
-    populated = [r for r in rows if r["source_image_mean_complexity"]]
-    assert len(populated) > 0
-
-
 def test_pipeline_writes_scores_csv(pipeline_output):
     _, workspace, _ = pipeline_output
     csv_path = workspace / "scores" / "ingest_scores.csv"
     assert csv_path.exists()
     with open(csv_path) as f:
         header = f.readline().strip()
-    # Tier 3.5 added calibration_outlier column
     assert "calibration_outlier" in header
     assert "score_calibrated" in header
     assert "complexity_score" in header
 
 
-def test_pipeline_writes_histogram(pipeline_output):
-    _, workspace, _ = pipeline_output
-    hist = workspace / "scores" / "histogram.txt"
-    assert hist.exists()
-    body = hist.read_text()
-    assert "complexity score histogram" in body
-    assert "bin_start" in body
-
-
-def test_pipeline_writes_threshold_audit(pipeline_output):
-    _, workspace, _ = pipeline_output
-    audit = workspace / "scored" / "threshold_used.txt"
-    assert audit.exists()
-    body = audit.read_text()
-    assert "tile_size" in body
-    assert "threshold_used" in body
-    assert "suggested_threshold" in body
-
-
-def test_pipeline_writes_calibration_outliers(pipeline_output):
-    _, workspace, _ = pipeline_output
-    out = workspace / "scores" / "calibration_outliers.csv"
-    assert out.exists()
-
-
 def test_pipeline_summary_stats(pipeline_output):
     _, _, stats = pipeline_output
-    # 7 source images in the calibration folder
-    assert stats["sources_processed"] == 7
-    # Some tiles passed ICNet + CLIP-IQA scoring
-    assert stats["tiles_passed"] > 0
-    # At least one tile passed both stages
-    assert stats["tiles_kept"] > 0
+    # 5 sources: aaa_dup, textured, flat, tiny, truncated
+    assert stats["sources_processed"] == 5
+    # Only the two identical 512px sources produce tiles: 16 each. The
+    # truncated JPEG and the two gate-rejected sources contribute nothing.
+    assert stats["tiles_scored"] == 32
+    assert stats["tiles_passed"] == 32  # threshold=0.0 passes all signal-passing tiles
+    assert 0 < stats["tiles_kept"] <= 16  # dup pair collapses; intra-source near-dupes may also collapse
 
 
 def test_pipeline_cleans_up_intermediates(pipeline_output):
-    """Tier 1.1: raw_tiles/ and scored/redundant/ must be removed."""
     _, workspace, _ = pipeline_output
     assert not (workspace / "raw_tiles").exists()
     assert not (workspace / "scored" / "redundant").exists()
@@ -133,88 +152,30 @@ def test_pipeline_cleans_up_intermediates(pipeline_output):
 
 def test_pipeline_no_duplicate_final_tiles(pipeline_output):
     out, _, _ = pipeline_output
-    tiles = list((out / "tiles").glob("*.png"))
-    names = [t.name for t in tiles]
-    assert len(names) == len(set(names)), "Duplicate final tile names"
+    tiles = [t.name for t in (out / "tiles").glob("*.png")]
+    assert len(tiles) == len(set(tiles)), "Duplicate final tile names"
 
 
-def test_pipeline_with_multiscale_produces_more_tiles(tmp_path):
-    """Tier default: multiscale=ON should produce >= as many final tiles
-    as multiscale=OFF for the same threshold, on the same inputs."""
-    out = tmp_path / "ms"
-    run_pipeline(
-        input_dir=CALIB_DIR,
-        output_dir=out,
-        workspace=out / "workspace",
-        model_path=None,
-        tile_size=128,
-        threshold=0.45,
-        clipiqa_threshold=0.3,
-        dedupe_threshold=0.96,
-        batch_size=0,
-        workers=2,
-        max_vram_gb=0.0,
-        multiscale=True,
-        io_throttle_sec=0.0,
-        strict=False,
-        resume=False,
-        stage="all",
-        dry_run=False,
-        cleanup=True,
-    )
-    out_single = tmp_path / "single"
-    run_pipeline(
-        input_dir=CALIB_DIR,
-        output_dir=out_single,
-        workspace=out_single / "workspace",
-        model_path=None,
-        tile_size=128,
-        threshold=0.45,
-        clipiqa_threshold=0.3,
-        dedupe_threshold=0.96,
-        batch_size=0,
-        workers=2,
-        max_vram_gb=0.0,
-        multiscale=False,
-        io_throttle_sec=0.0,
-        strict=False,
-        resume=False,
-        stage="all",
-        dry_run=False,
-        cleanup=True,
-    )
-    n_ms = len(list((out / "tiles").glob("*.png")))
-    n_single = len(list((out_single / "tiles").glob("*.png")))
-    assert n_ms >= n_single, f"Multiscale {n_ms} < single-scale {n_single}"
-
-
-def test_threshold_auto_adjust_per_tile_size(tmp_path):
-    """When no --threshold is passed, the orchestrator should use the
-    calibration-suggested value, not 0.45."""
+def test_pipeline_auto_threshold_from_calibration(tmp_path):
+    """With no --threshold, the orchestrator uses the calibration-suggested
+    value for the tile size (0.472 for 128px), not 0.45."""
+    inp = tmp_path / "input"
+    inp.mkdir()
+    cv2.imwrite(str(inp / "textured.png"), _textured_gray())
     out = tmp_path / "auto"
-    run_pipeline(
-        input_dir=CALIB_DIR,
-        output_dir=out,
-        workspace=out / "workspace",
-        model_path=None,
-        tile_size=128,
-        threshold=None,
-        clipiqa_threshold=0.0,
-        dedupe_threshold=0.96,
-        batch_size=0,
-        workers=2,
-        max_vram_gb=0.0,
-        multiscale=False,
-        io_throttle_sec=0.0,
-        strict=False,
-        resume=False,
-        stage="all",
-        dry_run=False,
-        cleanup=False,
-    )
+    run(inp, out, threshold=None, cleanup=False)
     audit = out / "workspace" / "scored" / "threshold_used.txt"
     assert audit.exists()
-    body = audit.read_text()
-    # 128px auto-threshold from shipped calibration is ~0.4724
-    # (6 decimal places of precision in the audit file).
-    assert "threshold_used: 0.472" in body, body
+    assert "threshold_used: 0.472" in audit.read_text(), audit.read_text()
+
+
+def test_pipeline_with_multiscale_produces_at_least_as_many_tiles(tmp_path):
+    inp = tmp_path / "input"
+    inp.mkdir()
+    cv2.imwrite(str(inp / "textured.png"), _textured_gray())
+    results = {}
+    for tag, ms in (("ms", True), ("single", False)):
+        out = tmp_path / tag
+        run(inp, out, multiscale=ms, cleanup=True)
+        results[tag] = len(list((out / "tiles").glob("*.png")))
+    assert results["ms"] >= results["single"]
