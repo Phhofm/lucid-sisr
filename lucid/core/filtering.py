@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import csv
 import logging
+import re
+import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
+from PIL import Image
 from tqdm import tqdm
 
 from ..io import BufferedTileWriter
@@ -31,6 +34,14 @@ def _compute_scales(h_orig: int, w_orig: int, tile_size: int, multiscale: bool) 
         if min_dim > tile_size:
             scales.append(tile_size / min_dim)
     return sorted({s for s in scales if s > 0}, reverse=True)
+
+
+def _resample(arr: np.ndarray, new_w: int, new_h: int) -> np.ndarray:
+    """Downscale with Pillow BICUBIC — the same kernel as the >8192px
+    path in ``validation.py`` (and the MATLAB/benchmark convention).
+    A single kernel across the pipeline; no second overshoot profile."""
+    im = Image.fromarray(arr)
+    return np.array(im.resize((new_w, new_h), Image.BICUBIC), dtype=np.uint8)
 
 
 def run_ingest(
@@ -80,7 +91,6 @@ def run_ingest(
     Returns:
         (sources_processed, tiles_scored, tiles_passed) for summary stats.
     """
-    import shutil
 
     io_throttle = recommend_io_throttle(workspace, io_throttle_sec)
     # Per-image staging dir; replaced the flat `raw_tiles/` layout in v3.0
@@ -144,6 +154,8 @@ def run_ingest(
     all_cal: list[float] = []
     all_names: list[str] = []
     all_paths: list[str] = []
+    # Per-scale tags seen -> [seen, signal_passed, icnet_passed]
+    scale_stats: dict[str, list[int]] = {}
 
     # Phase 1+2 fused: extract one image, score it, delete staging, repeat.
     # This is Pass 2.1 (per-image streaming) + Pass 2.2 (no global raw_tiles).
@@ -171,7 +183,7 @@ def run_ingest(
             ):
                 img_path = future_to_img[future]
                 try:
-                    image_stage, num_passed, err = future.result()
+                    image_stage, num_passed, err, per_scale = future.result()
                 except RuntimeError:
                     raise
                 except Exception as exc:
@@ -183,6 +195,13 @@ def run_ingest(
                     state.mark_source_status(img_path, "failed", str(exc))
                     sources_processed += 1
                     continue
+
+                # Aggregate per-scale tile statistics (both on failures
+                # with partial stats and on success).
+                for tag, (seen, passed) in per_scale.items():
+                    _acc = scale_stats.setdefault(tag, [0, 0, 0])
+                    _acc[0] += seen
+                    _acc[1] += passed
 
                 if err:
                     if strict:
@@ -237,6 +256,9 @@ def run_ingest(
                     all_names.extend(batch_records["names"])
                     all_paths.extend(batch_records["paths"])
                     tiles_passed_total += tiles_scored_this
+                    for name, ok in zip(batch_records["names"], batch_records["passed"]):
+                        tag = re.search(r"_s(\d{3})_t", name).group(1)
+                        scale_stats.setdefault(f"s{tag}", [0, 0, 0])[2] += int(ok)
 
                 # Cleanup: drop this image's staging subfolder so peak disk
                 # is bounded to one image's tiles.
@@ -267,6 +289,7 @@ def run_ingest(
             threshold=threshold,
             calibrate=calibrate,
             clipiqa_threshold=clipiqa_threshold,
+            scale_stats=scale_stats,
         )
 
     # Remove the empty stage dir if no per-image subfolders left
@@ -301,7 +324,7 @@ def extract_tiles_to_staging(
 
     img_np = load_image_as_rgb(img_path)
     if img_np is None:
-        return None, 0, f"Could not load image: {img_path.name}"
+        return None, 0, f"Could not load image: {img_path.name}", {}
 
     h, w, _ = img_np.shape
     scales = _compute_scales(h, w, tile_size, multiscale)
@@ -312,25 +335,25 @@ def extract_tiles_to_staging(
     total_passed = 0
     seen_hashes: set[int] = set()
     dup_count = 0
+    scale_stats: dict[str, tuple[int, int]] = {}
     for scale in scales:
+        tag = f"s{int(scale * 100):03d}"
         tile_img = (
             img_np
             if scale == 1.0
-            else cv2.resize(
-                img_np,
-                (int(w * scale), int(h * scale)),
-                interpolation=cv2.INTER_CUBIC,
-            )
+            else _resample(img_np, int(w * scale), int(h * scale))
         )
         th, tw, _ = tile_img.shape
-        name_base = f"{img_path.stem}_s{int(scale * 100):03d}"
+        name_base = f"{img_path.stem}_{tag}"
 
+        seen = signal_passed = 0
         for y in range(th // tile_size):
             for x in range(tw // tile_size):
                 tile = tile_img[
                     y * tile_size : (y + 1) * tile_size,
                     x * tile_size : (x + 1) * tile_size,
                 ]
+                seen += 1
                 gray = cv2.cvtColor(tile, cv2.COLOR_RGB2GRAY)
 
                 metrics, passes = measure_all(gray)
@@ -350,7 +373,9 @@ def extract_tiles_to_staging(
                     str(image_stage / tile_name),
                     cv2.cvtColor(tile, cv2.COLOR_RGB2BGR),
                 )
-                total_passed += 1
+                signal_passed += 1
+        total_passed += signal_passed
+        scale_stats[tag] = (seen, signal_passed)
 
     if dup_count:
         logger.debug(
@@ -361,9 +386,9 @@ def extract_tiles_to_staging(
 
     if strict and total_passed == 0 and h >= tile_size and w >= tile_size:
         # strict mode: surface the failure
-        return image_stage, 0, f"0 tiles passed signal filter for {img_path.name}"
+        return image_stage, 0, f"0 tiles passed signal filter for {img_path.name}", scale_stats
 
-    return image_stage, total_passed, None
+    return image_stage, total_passed, None, scale_stats
 
 
 def _load_batch_items(
@@ -544,7 +569,7 @@ def _score_batch(
     """
     from ..resources.icnet_calibration import apply_calibration
 
-    record: dict[str, list] = {"raw": [], "cal": [], "names": [], "paths": []}
+    record: dict[str, list] = {"raw": [], "cal": [], "names": [], "paths": [], "passed": []}
     if not items:
         return 0, record
 
@@ -620,6 +645,7 @@ def _score_batch(
             record["cal"].append(sc_cal)
             record["names"].append(t.name)
             record["paths"].append(str(t))
+            record["passed"].append(bool(icnet_pass and ciqa_pass))
     return tiles_passed, record
 
 
@@ -638,10 +664,10 @@ def _score_staged_tiles(
 
     tile_paths = sorted(image_stage.glob("*.png"))
     if not tile_paths:
-        return 0, {"raw": [], "cal": [], "names": [], "paths": []}
+        return 0, {"raw": [], "cal": [], "names": [], "paths": [], "passed": []}
 
     tiles_passed_total = 0
-    record: dict[str, list] = {"raw": [], "cal": [], "names": [], "paths": []}
+    record: dict[str, list] = {"raw": [], "cal": [], "names": [], "paths": [], "passed": []}
     batch_size = ctx.batch_size
 
     with BufferedTileWriter(
@@ -656,6 +682,7 @@ def _score_staged_tiles(
             record["cal"].extend(rec["cal"])
             record["names"].extend(rec["names"])
             record["paths"].extend(rec["paths"])
+            record["passed"].extend(rec["passed"])
     ctx.writer = None
     return tiles_passed_total, record
 
@@ -671,6 +698,7 @@ def _write_score_artifacts(
     threshold: float,
     calibrate: bool,
     clipiqa_threshold: float = 0.0,
+    scale_stats: dict[str, list[int]] | None = None,
 ) -> None:
     """Tier 3.1 / 3.3 / 3.5: post-run summary artifacts.
 
@@ -755,6 +783,21 @@ def _write_score_artifacts(
         f.write(f"tiles_passing: {n_pass}\n")
         f.write(f"tiles_rejected: {n_rej}\n")
     logger.info("Wrote threshold audit to %s", threshold_path)
+
+    # ---- Per-scale pass-rate stats: is each multiscale scale earning
+    # its compute? (e.g. 0.25x tiles often fail the complexity gate.)
+    if scale_stats:
+        scale_path = scores_csv.parent / "scale_pass_rates.txt"
+        with open(scale_path, "w") as f:
+            f.write("# per-scale tile statistics\n")
+            f.write("# tag    seen  signal_passed  icnet_passed\n\n")
+            for tag, (seen, sig, icn) in sorted(scale_stats.items()):
+                rate = sig / seen if seen else 0.0
+                f.write(
+                    f"  {tag}  {seen:6d}  {sig:6d}  {icn:6d}"
+                    f"  ({rate:5.1%} signal)\n"
+                )
+        logger.info("Wrote per-scale stats to %s", scale_path)
 
     # ---- Tier 3.5: top-100 calibration outliers ----
     outliers = [

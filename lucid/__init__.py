@@ -4,7 +4,7 @@ A dataset filtering pipeline that prioritizes technical signal quality
 over human-perception metrics for super-resolution training.
 """
 
-__version__ = "3.1.0"
+__version__ = "3.1.2"
 
 # Lazy imports: only load torch-dependent modules when actually needed.
 # This allows `import lucid` to succeed in environments without torch

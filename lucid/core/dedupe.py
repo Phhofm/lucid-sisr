@@ -18,6 +18,7 @@ import gc
 import logging
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -59,6 +60,9 @@ def _get_feature_extractor(device: str) -> nn.Module:
     # Remove the final FC layer; we want the 512-D global avg-pool output
     model = nn.Sequential(*list(model.children())[:-1])
     model.to(device).eval()
+    # FP16 on real accelerators (matches the ICNet scoring path); MPS keeps FP32.
+    if device.startswith(("cuda", "xpu")):
+        model.half()
     return model
 
 
@@ -248,19 +252,23 @@ def run_dedupe(
         if not batch:
             continue
 
-        # Parallel I/O + preprocessing on CPU
-        tensors: list[torch.Tensor] = []
-        valid: list[Path] = []
-        for p in batch:
+        # Parallel decode + preprocessing on CPU (I/O bound); features are
+        # computed in FP16 on CUDA/XPU, then normalized in FP32.
+        def _tile_tensor(p: Path) -> torch.Tensor | None:
             try:
                 with Image.open(p) as im:
                     w, h = im.size
                     if w > MAX_IMAGE_DIM or h > MAX_IMAGE_DIM:
-                        continue
-                    tensors.append(preprocess(im.convert("RGB")))
-                    valid.append(p)
+                        return None
+                    return preprocess(im.convert("RGB"))
             except Exception as exc:
                 logger.warning("Skipping unreadable tile %s: %s", p, exc)
+                return None
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            decoded = list(pool.map(_tile_tensor, batch))
+        tensors = [t for t in decoded if t is not None]
+        valid = [p for p, t in zip(batch, decoded) if t is not None]
 
         if not tensors:
             continue
@@ -268,10 +276,13 @@ def run_dedupe(
         processed += len(valid)
 
         feat = torch.stack(tensors).to(device)
+        if device.startswith(("cuda", "xpu")):
+            feat = feat.half()
         with torch.no_grad():
             features = model(feat).squeeze()
             if features.dim() == 1:
                 features = features.unsqueeze(0)
+            features = features.float()
             features = nn.functional.normalize(features, p=2, dim=1)
 
             # Stream: each tile is compared against everything accepted so

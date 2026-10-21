@@ -169,6 +169,20 @@ def test_pipeline_auto_threshold_from_calibration(tmp_path):
     assert "threshold_used: 0.472" in audit.read_text(), audit.read_text()
 
 
+def test_pipeline_writes_run_config_manifest(pipeline_output):
+    """A run manifest with the full gate configuration must land next to
+    master_lineage.csv for provable provenance."""
+    import json
+
+    out, _, _ = pipeline_output
+    manifest = out / "run_config.json"
+    assert manifest.exists()
+    cfg = json.loads(manifest.read_text())
+    assert cfg["tile_size"] == 128
+    assert cfg["threshold"] == 0.0
+    assert cfg["stats"]["tiles_kept"] >= 0
+
+
 def test_pipeline_with_multiscale_produces_at_least_as_many_tiles(tmp_path):
     inp = tmp_path / "input"
     inp.mkdir()

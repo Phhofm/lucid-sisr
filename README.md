@@ -241,6 +241,8 @@ python -m lucid --input ./sample/ --output /tmp/lucid_preview --dry-run --tile-s
 #   workspace/scored/threshold_used.txt   (audit trail: what threshold + R²)
 #   workspace/scores/histogram.txt       (score distribution)
 #   workspace/scores/calibration_outliers.csv  (top 100 score drift)
+#   workspace/scores/scale_pass_rates.txt      (per-multiscale-scale pass rates)
+#   run_config.json                       (full gate manifest for provenance)
 #   master_lineage.csv                    (per-image pass-rate)
 ```
 

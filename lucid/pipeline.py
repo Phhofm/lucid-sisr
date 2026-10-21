@@ -1,6 +1,10 @@
 """Unified pipeline orchestrator - runs all stages in sequence."""
+from __future__ import annotations
+
+import json
 import logging
 import shutil
+import time
 from pathlib import Path
 from typing import Literal
 
@@ -299,5 +303,29 @@ def run_pipeline(
     logger.info("Sources processed: %d", stats["sources_processed"])
     logger.info("Tiles passed ICNet scoring: %d", stats["tiles_passed"])
     logger.info("Unique tiles finalized: %d", stats["tiles_kept"])
+
+    # Provenance manifest: the full gate configuration + counts next to
+    # master_lineage.csv, so a dataset can always be traced to its run.
+    if not dry_run:
+        import lucid
+
+        manifest = {
+            "lucid_version": lucid.__version__,
+            "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "input_dir": str(input_dir),
+            "tile_size": tile_size,
+            "threshold": threshold,
+            "clipiqa_threshold": clipiqa_threshold,
+            "dedupe_threshold": dedupe_threshold,
+            "trim_bottom": trim_bottom,
+            "multiscale": multiscale,
+            "calibrate": calibrate,
+            "strict": strict,
+            "stage": stage,
+            "stats": stats,
+        }
+        manifest_path = output_dir / "run_config.json"
+        manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True))
+        logger.info("Wrote run manifest to %s", manifest_path)
 
     return stats

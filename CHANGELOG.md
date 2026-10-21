@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [3.2.0] - 2026-10-21
+
+### Added
+- **Per-scale pass-rate stats** (`scores/scale_pass_rates.txt`): seen /
+  signal-passed / ICNet-passed per multiscale scale tag, so you can
+  measure whether small scales earn their compute. (First real run:
+  0.25x produced 0 passing tiles on smooth content.)
+- **`run_config.json` manifest** next to `master_lineage.csv`: full gate
+  configuration + counts + lucid version + UTC timestamp.
+
+### Changed
+- **Multiscale resampling unified to Pillow BICUBIC** — the same kernel
+  as the >8192px downscale path (previously a second, more overshooting
+  cv2 bicubic).
+- Dedupe: ResNet-18 features computed in FP16 on CUDA/XPU and tile
+  decoding threaded (8 workers) — throughput; kept-set unchanged.
+
 ## [3.1.2] - 2026-10-21
 
 ### Fixed
