@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 
 PNG_GLOB = "*.png"
 
+# Auto --threshold floor: below ~0.30 calibrated complexity a tile is
+# junk (flat/sky/defocus) in every domain tested; above it, selection
+# semantics are the user's call (complexity, not artifact-free-ness).
+JUNK_FLOOR = 0.30
+
 
 def run_pipeline(
     input_dir: Path,
@@ -169,7 +174,10 @@ def run_pipeline(
         )
 
     if threshold is None:
-        threshold = suggested_threshold(tile_size)
+        # Junk floor, not a quality bar: 0.30 keeps ~99% of curated GT
+        # (PSISRD val125 p1 = 0.303) while still dropping sky/flat/defocus.
+        # Dataset shaping belongs to --trim-bottom / explicit --threshold.
+        threshold = min(suggested_threshold(tile_size), JUNK_FLOOR)
 
     # Run stages
     stages = ["ingest", "dedupe", "finalize"] if stage == "all" else [stage]

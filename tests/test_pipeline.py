@@ -157,8 +157,8 @@ def test_pipeline_no_duplicate_final_tiles(pipeline_output):
 
 
 def test_pipeline_auto_threshold_from_calibration(tmp_path):
-    """With no --threshold, the orchestrator uses the calibration-suggested
-    value for the tile size (0.472 for 128px), not 0.45."""
+    """With no --threshold, the orchestrator uses the junk floor (0.30,
+    calibrated on curated GT where p1 = 0.303), not the old top-half cut."""
     inp = tmp_path / "input"
     inp.mkdir()
     cv2.imwrite(str(inp / "textured.png"), _textured_gray())
@@ -166,7 +166,8 @@ def test_pipeline_auto_threshold_from_calibration(tmp_path):
     run(inp, out, threshold=None, cleanup=False)
     audit = out / "workspace" / "scored" / "threshold_used.txt"
     assert audit.exists()
-    assert "threshold_used: 0.472" in audit.read_text(), audit.read_text()
+    body = audit.read_text()
+    assert "threshold_used: 0.300" in body, body
 
 
 def test_pipeline_writes_run_config_manifest(pipeline_output):

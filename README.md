@@ -141,7 +141,7 @@ After successful completion, a `lucid_workspace_<input-name>/` scratch folder is
 | `--icnet PATH` | *(auto-download)* | Path to ICNet `.pth` weights; downloads automatically on first run |
 | `--tile-size INT` | `512` | Tile dimension in pixels. Supported: **128, 256, 512, 1024**. 512 is native; other sizes use a per-size linear calibration curve (R² ≥ 0.94, shipped in `lucid/resources/icnet_calibration.json`) to map raw ICNet scores to the 512-trained distribution. |
 | `--no-calibrate` | off | Disable the calibration transform. Use raw ICNet scores for the threshold comparison. Default: enabled. |
-| `--threshold FLOAT` | `0.45` | Minimum ICNet complexity score (0.0–1.0) |
+| `--threshold FLOAT` | `auto` (junk floor `0.30`) | Minimum ICNet complexity score (0.0–1.0). Auto = junk floor only; complexity shaping for small nets: `--trim-bottom 50` |
 | `--dedupe-threshold FLOAT` | `0.96` | Cosine similarity above which tiles are considered duplicates |
 | `--trim-bottom INT` | `0` | Drop the lowest-complexity N% of tiles at the dedupe stage (0 = off). BHI finding: removing only the worst tiles beats keeping only the best |
 | `--workers INT` | `cpu_count - 2` | Parallel CPU workers for tile extraction |

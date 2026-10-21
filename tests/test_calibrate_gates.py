@@ -31,7 +31,7 @@ def test_sample_crops_skips_undersized_images():
     assert _sample_crops(img, 512, np.random.default_rng(0)) == []
     big = np.zeros((600, 600, 3), np.uint8)
     crops = _sample_crops(big, 512, np.random.default_rng(0))
-    assert len(crops) == 8 and all(c.shape == (512, 512) for c in crops)
+    assert len(crops) == 8 and all(c.shape == (512, 512, 3) for c in crops)
 
 
 def test_calibrate_gates_end_to_end(tmp_path, capsys):
@@ -48,6 +48,7 @@ def test_calibrate_gates_end_to_end(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Calibrated on 32 crops" in out  # 4 images x 8 crops (full-size, no jitter)
     assert "ref-kept" in out
+    assert "complexity" in out  # ICNet complexity distribution from bundled weights
     assert set(suggested) == {
         "entropy_min", "lap_var_min", "grad_energy_min",
         "blockiness_max", "noise_ratio_max", "aliasing_max",

@@ -236,9 +236,11 @@ def main() -> int:
     # Auto-adjust threshold per tile size from the calibration table.
     threshold = args.threshold
     if threshold is None:
-        threshold = suggested_threshold(args.tile_size)
+        # Junk floor (complexity selection belongs to --trim-bottom)
+        from lucid.pipeline import JUNK_FLOOR
+        threshold = min(suggested_threshold(args.tile_size), JUNK_FLOOR)
         logger.info(
-            "Auto-threshold for %dpx: %.3f (pass --threshold to override).",
+            "Auto-threshold for %dpx: %.3f (junk floor; pass --threshold to override).",
             args.tile_size,
             threshold,
         )

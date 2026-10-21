@@ -42,6 +42,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `tests/test_resume.py` is hermetic (was hardcoding an external input
   folder); suite wall time down from ~70 s to ~44 s.
 
+## [3.3.0] - 2026-10-21
+
+### Changed
+- **Auto --threshold is a junk floor (0.30), not a quality bar**: the old
+  auto-0.45 was a top-half complexity cut that silently dropped half of
+  curated GT (and would nuke low-complexity domains like anime).
+  0.30 is calibrated on curated GT (PSISRD val125 p1 = 0.303, keeps
+  99.2%); complexity *shaping* stays explicit via `--trim-bottom N`
+  (small nets wanting high-complexity exposure: `--trim-bottom 50`).
+
+### Added
+- `lucid-calibrate-gates` now also reports the ICNet complexity
+  distribution (p1/p5/p50/p99) of the reference folder with a suggested
+  `--threshold`, so the floor and shaping can be derived per domain.
+
 ## [3.2.1] - 2026-10-21
 
 ### Fixed
