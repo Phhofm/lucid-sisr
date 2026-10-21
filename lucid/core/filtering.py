@@ -218,27 +218,10 @@ def run_ingest(
                 if num_passed == 0:
                     logger.warning(
                         "0 tiles passed signal filter for %s "
-                        "(image may be too small, all-blur, or all-sky)",
+                        "(image may be too small for --tile-size, all-blur, "
+                        "or all-sky)",
                         img_path.name,
                     )
-
-                # Tier 3.7: small-image warning
-                try:
-                    from PIL import Image as _PILImage
-                    with _PILImage.open(img_path) as im:
-                        w0, h0 = im.size
-                        if min(h0, w0) < int(tile_size * 1.1):
-                            logger.warning(
-                                "Source %s is %dx%d, smaller than "
-                                "1.1x --tile-size=%d; expect 0-1 "
-                                "extracted tiles.",
-                                img_path.name,
-                                w0,
-                                h0,
-                                tile_size,
-                            )
-                except Exception:
-                    pass
 
                 # Score this image's tiles immediately, then drop the staging dir.
                 tiles_scored_this = 0

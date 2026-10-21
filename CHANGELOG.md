@@ -42,6 +42,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `tests/test_resume.py` is hermetic (was hardcoding an external input
   folder); suite wall time down from ~70 s to ~44 s.
 
+## [3.2.1] - 2026-10-21
+
+### Fixed
+- **Signal gates recalibrated on real GT data** (first live PSISRD
+  val125 run kept only 10/125 curated tiles):
+  - `aliasing_max` 0.40 -> **0.80**: real photos have a rich 1/f
+    spectrum (measured 0.31-0.74 on curated GT); the 0.40 gate came
+    from synthetic fixtures whose spectrum decays too fast. Oversharpening
+    capture now rests mainly on `lap_var_max`.
+  - `noise_ratio_max` 0.65 -> **1.35**: clean GT measured 0.32-1.00
+    (median 0.66), so the old gate rejected half of curated GT even
+    before this release. Now a heavy-noise pre-filter (sigma~40+
+    separates); moderate noise remains the ICNet/dedupe stages' job.
+- Removed the per-image "smaller than 1.1x tile-size" warning spam
+  (fired 125x on an all-512px dataset); the 0-tiles-passed warning
+  already covers images that produce nothing.
+
+### Measured
+- PSISRD val125 hr/ rerun: 125/125 signal-passed, 60/125 finalized
+  (48% ICNet retention at the 0.45 auto-threshold).
+
 ## [3.1.1] - 2026-10-21
 
 ### Fixed

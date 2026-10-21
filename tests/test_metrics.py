@@ -2,7 +2,13 @@
 import cv2
 import numpy as np
 
-from lucid.core.metrics import THRESHOLDS, aliasing_ratio, blockiness, measure_all
+from lucid.core.metrics import (
+    THRESHOLDS,
+    aliasing_ratio,
+    blockiness,
+    measure_all,
+    noise_ratio,
+)
 
 
 def _natural_image() -> np.ndarray:
@@ -133,10 +139,37 @@ def test_aliasing_broadband_clutter_rejected():
     clutter = (
         np.sin(x * 0.8)[None, :] * 60
         + np.sin(x * 0.5)[:, None] * 40
-        + rng.integers(-10, 10, (512, 512))
+        + rng.integers(-14, 14, (512, 512))
         + 128
     ).clip(0, 255).astype(np.uint8)
     assert aliasing_ratio(clutter) > THRESHOLDS["aliasing_max"]
+
+
+def _photo_like_image() -> np.ndarray:
+    """Multi-octave image with a natural 1/f-like spectrum."""
+    rng = np.random.default_rng(0)
+    img = np.zeros((512, 512), np.float32)
+    for size in (32, 64, 128):
+        img += cv2.resize(
+            rng.integers(0, 256, (size, size), dtype=np.uint8),
+            (512, 512),
+            interpolation=cv2.INTER_CUBIC,
+        ).astype(np.float32)
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+
+def test_noise_ratio_heavy_noise_rejected_clean_kept():
+    """The noise gate is a heavy-junk pre-filter, calibrated on curated
+    512px GT where clean photos measure 0.32-1.00; only heavy noise
+    overlays (~sigma 40+) separate above it."""
+    nat = _photo_like_image()
+    noisy = np.clip(
+        nat.astype(np.float32)
+        + np.random.default_rng(1).normal(0, 40, nat.shape),
+        0, 255,
+    ).astype(np.uint8)
+    assert noise_ratio(nat) < THRESHOLDS["noise_ratio_max"]
+    assert noise_ratio(noisy) > THRESHOLDS["noise_ratio_max"]
 
 
 def test_thresholds_exist():

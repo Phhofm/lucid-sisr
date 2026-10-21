@@ -21,11 +21,15 @@ THRESHOLDS = {
     # blockiness is a normalized ratio (boundary vs interior gradient),
     # ~1.0 for clean content; Q30 JPEG flats measure ~2.0
     "blockiness_max": 1.7,
-    # Hann-windowed ring-energy ratio; stripes/UI patterns ~0.8,
-    # sharp natural content < 0.15
-    "aliasing_max": 0.40,
+    # Hann-windowed ring-energy ratio, calibrated on curated 512px GT:
+    # clean natural photos measure 0.31-0.74 (median 0.51); heavy noise
+    # / UI patterns / strong ringing land above ~0.80
+    "aliasing_max": 0.80,
     "grad_energy_min": 0.70,
-    "noise_ratio_max": 0.65,
+    # hf/gradient proxy, calibrated on curated 512px GT: clean photos
+    # measure 0.32-1.00 (median 0.66); pre-filter for heavy noise
+    # (sigma~25) only — moderate noise is the ICNet/dedupe stages' job
+    "noise_ratio_max": 1.35,
 }
 
 
