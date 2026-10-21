@@ -143,14 +143,16 @@ def run_pipeline(
                 f"Pass --workspace <path> to the previous workspace directory."
             )
 
-    # Disk space check — count all supported formats to avoid underestimating
+    # Disk space check — derive need from the real input bytes
     if not dry_run:
         valid_exts = {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}
-        all_images = [p for p in input_dir.rglob("*") if p.suffix.lower() in valid_exts]
-        estimated_gb = estimate_disk_need_gb(len(all_images), tile_size, avg_tiles_per_image=25.0)
+        input_bytes = sum(
+            p.stat().st_size for p in input_dir.rglob("*") if p.suffix.lower() in valid_exts
+        )
+        estimated_gb = estimate_disk_need_gb(input_bytes)
         check_path = workspace.parent
         free_gb = get_disk_free_gb(check_path)
-        if free_gb < estimated_gb * 1.5:
+        if free_gb < estimated_gb:
             raise RuntimeError(
                 f"Estimated need ~{estimated_gb:.1f} GB but only {free_gb:.1f} GB free on {check_path}. "
                 f"Free space or use --workspace on a larger drive."

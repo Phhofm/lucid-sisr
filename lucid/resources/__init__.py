@@ -206,13 +206,13 @@ def recommend_io_throttle(output_path: Path, user_value: float = 0.0) -> float:
     return 0.0
 
 
-def estimate_disk_need_gb(num_source_images: int, tile_size: int = 512, avg_tiles_per_image: float = 25.0) -> float:
-    """Rough estimate of peak workspace size in GB.
+def estimate_disk_need_gb(input_bytes: float) -> float:
+    """Estimate peak workspace size from the actual input volume.
 
-    Uses a more realistic tile count: a 4K image (3840x2160) at 512px tiles yields ~28 tiles.
-    With multi-scale the average is higher. Default of 25 is a reasonable baseline.
+    The pipeline copies kept tiles up to three times (staging -> scored ->
+    tiles) plus metadata; ~2x the input bytes is the honest upper bound
+    (matches the README contract). The previous tiles-per-image estimator
+    assumed 25 tiles per source image and hallucinated terabytes for
+    folders whose images already are tiles.
     """
-    bytes_per_tile = tile_size * tile_size * 3  # uncompressed RGB
-    total_bytes = num_source_images * avg_tiles_per_image * bytes_per_tile
-    # Add 20% overhead for CSV, metadata, and dedupe staging
-    return (total_bytes * 1.2) / (1024 ** 3)
+    return (input_bytes * 2) / (1024 ** 3)
