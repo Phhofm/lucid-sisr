@@ -63,6 +63,7 @@ all = ["hnswlib>=0.7", "matplotlib>=3.7", "pyiqa>=0.1.10"]
 lucid = "lucid.__main__:main"
 lucid-gui = "lucid.gui:main"
 lucid-calibrate = "lucid.calibrate:main"
+lucid-calibrate-gates = "lucid.calibrate_gates:main"
 
 [project.urls]
 Homepage = "https://github.com/Phhofm/lucid-sisr"
