@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 
 import numpy as np
-from PIL import Image, ImageFile
+from PIL import Image, ImageFile, ImageOps
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,16 @@ def load_image_as_rgb(path: Path, max_dim: int = MAX_IMAGE_DIM) -> np.ndarray | 
     """
     try:
         with Image.open(path) as im:
+            # EXIF orientation: phone/Flickr photos are stored sideways;
+            # tile the displayed frame, not the raw pixel order.
+            im = ImageOps.exif_transpose(im)
             w, h = im.size
+            if im.mode in ("I", "I;16", "I;16B", "I;16L", "I;16N", "F"):
+                logger.warning(
+                    "Source %s is %s-mode (likely >8-bit); PIL silently "
+                    "collapses it during RGB conversion — verify RAW export.",
+                    path.name, im.mode,
+                )
             if w > max_dim or h > max_dim:
                 # Downscale to max_dim while preserving aspect
                 # Use BICUBIC to prevent halo/ringing artifacts associated with Lanczos

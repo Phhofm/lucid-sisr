@@ -1,0 +1,29 @@
+name: ci
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      # CPU wheels first (CUDA wheels are ~2.5 GB on the default index)
+      - name: Install CPU torch
+        run: pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - name: Install package
+        run: pip install -e . ruff
+      - name: Lint
+        run: ruff check .
+      - name: Test
+        run: pytest -q

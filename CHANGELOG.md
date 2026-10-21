@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [3.1.2] - 2026-10-21
+
+### Fixed
+- **EXIF orientation respected**: phone/Flickr photos carry orientation
+  tags; tiles were extracted from the sideways-stored pixel data. GT
+  orientation is now pixel-correct.
+- 16-bit sources (mode `I;16`) now warn — PIL silently collapses them
+  during RGB conversion.
+
+### Added
+- **--resume now refuses changed filtering gates**: resuming with a
+  different `threshold`/`clipiqa`/`multiscale`/etc. than the recorded
+  run aborts instead of silently mixing two gate configurations in one
+  dataset. Gate config is stored in the state DB.
+- GitHub Actions CI: ruff + full test suite on push/PR (CPU torch,
+  Python 3.11/3.12).
+
+### Changed
+- `tests/test_resume.py` is hermetic (was hardcoding an external input
+  folder); suite wall time down from ~70 s to ~44 s.
+
 ## [3.1.1] - 2026-10-21
 
 ### Fixed

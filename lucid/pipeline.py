@@ -174,9 +174,23 @@ def run_pipeline(
         logger.info("=== Starting stage: %s ===", stg.upper())
 
         if stg == "ingest":
+            # Filtering gates for this run; recorded per run so a later
+            # --resume cannot silently mix two gate configurations.
+            gate_config = {
+                "tile_size": tile_size,
+                "threshold": threshold,
+                "clipiqa_threshold": clipiqa_threshold,
+                "dedupe_threshold": dedupe_threshold,
+                "trim_bottom": trim_bottom,
+                "multiscale": multiscale,
+                "calibrate": calibrate,
+            }
             state = PipelineState(workspace)
             state.connect()
             try:
+                if resume:
+                    state.check_run_config(gate_config)
+                state.record_run_config(gate_config)
                 sources, scored, passed = filtering.run_ingest(
                     state=state,
                     workspace=workspace,

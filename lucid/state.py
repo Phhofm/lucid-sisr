@@ -1,6 +1,7 @@
 """SQLite-based state management for resumable pipeline execution."""
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from contextlib import contextmanager
@@ -57,7 +58,43 @@ class PipelineState:
             );
             CREATE INDEX IF NOT EXISTS idx_sources_status ON sources(status);
             CREATE INDEX IF NOT EXISTS idx_sources_path ON sources(source_path);
+            CREATE TABLE IF NOT EXISTS run_config (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
         """)
+
+    def record_run_config(self, config: dict[str, Any]) -> None:
+        """Persist the filtering gates this run is using."""
+        assert self._conn is not None
+        with self.get_cursor() as cur:
+            cur.executemany(
+                "INSERT OR REPLACE INTO run_config(key, value) VALUES (?, ?)",
+                sorted(
+                    (k, json.dumps(v, sort_keys=True)) for k, v in config.items()
+                ),
+            )
+
+    def check_run_config(self, config: dict[str, Any]) -> None:
+        """Refuse a resume whose recorded gates differ from the current ones.
+
+        Half a dataset filtered with old gates and half with new ones is
+        silent dataset corruption, so mismatch is fatal.
+        """
+        assert self._conn is not None
+        with self.get_cursor() as cur:
+            rows = dict(cur.execute("SELECT key, value FROM run_config").fetchall())
+        if not rows:
+            return  # legacy DB without a recorded config
+        current = {k: json.dumps(v, sort_keys=True) for k, v in config.items()}
+        changed = sorted(k for k in current if rows.get(k) != current[k])
+        if changed:
+            prev = {k: rows.get(k) for k in changed}
+            raise RuntimeError(
+                f"Cannot --resume: pipeline gates changed since the recorded "
+                f"run: {changed} (recorded: {prev}). Re-run without --resume, "
+                f"or delete the workspace to start fresh."
+            )
 
     def register_source(self, source: Path, width: int | None = None, height: int | None = None) -> int:
         """Register a source image and return its row id."""
