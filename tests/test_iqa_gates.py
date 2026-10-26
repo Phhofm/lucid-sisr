@@ -55,7 +55,6 @@ def _run_batch(ctx, n=3):
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as f:
         csv_path = Path(f.name)
     try:
-        import io, csv as _csv
 
         written = []
 
