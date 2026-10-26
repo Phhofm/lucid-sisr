@@ -44,6 +44,36 @@ def _resample(arr: np.ndarray, new_w: int, new_h: int) -> np.ndarray:
     return np.array(im.resize((new_w, new_h), Image.BICUBIC), dtype=np.uint8)
 
 
+def build_gate_list(
+    iqa_gates: list[tuple[str, float]] | None, clipiqa_threshold: float
+) -> list[tuple[str, float]]:
+    """Merge CLI gate specs: legacy --clipiqa first, then --iqa-gate pairs.
+    Order matters: cheapest runs first (mini>0 and lower_better probe
+    handled by the metric itself). Zero-threshold entries = disabled."""
+    gates: list[tuple[str, float]] = []
+    if clipiqa_threshold and clipiqa_threshold > 0:
+        gates.append(("clipiqa", float(clipiqa_threshold)))
+    for name, thr in (iqa_gates or []):
+        if thr and thr > 0:
+            gates.append((name, float(thr)))
+    return gates
+
+
+def _load_iqa_metric(name: str, device: str):
+    """Load one pyiqa metric; returns (model, lower_better) or None."""
+    try:
+        import pyiqa
+    except ImportError:
+        logger.warning(
+            "pyiqa not installed; skipping IQA gate %s. "
+            "Install with: pip install git+https://github.com/chaofengc/IQA-PyTorch.git",
+            name,
+        )
+        return None
+    metric = pyiqa.create_metric(name, device=device)
+    return metric, bool(getattr(metric, "lower_better", False))
+
+
 def run_ingest(
     state: PipelineState,
     workspace: Path,
@@ -60,6 +90,7 @@ def run_ingest(
     strict: bool = False,
     calibrate: bool = True,
     io_throttle_sec: float = 0.0,
+    iqa_gates: list[tuple[str, float]] | None = None,
 ) -> tuple[int, int, int]:
     """Run the full ingest pipeline: signal filter -> ICNet score.
 
@@ -76,8 +107,8 @@ def run_ingest(
         input_dir: Source image folder.
         tile_size: Tile dimension in pixels.
         threshold: Minimum ICNet complexity score.
-        clipiqa_threshold: Minimum CLIP-IQA score for artifact filtering.
-            Removes ringing/haloring and low-quality tiles. 0.0 = disabled.
+        clipiqa_threshold: Legacy single-gate alias; use ``iqa_gates``.
+            0.0 = disabled.
         model_path: Path to ICNet weights.
         workers: CPU worker count for tile extraction.
         batch_size: GPU batch size for ICNet scoring.
@@ -87,6 +118,11 @@ def run_ingest(
         strict: Abort pipeline on the first unreadable/corrupt image.
         calibrate: Apply calibration curve to ICNet scores.
         io_throttle_sec: Seconds to sleep between disk writes (auto-detects USB).
+        iqa_gates: Extra pyiqa perceptual gates [(metric_name, threshold)],
+            e.g. [("topiq_nr", 0.45), ("qrealign-mini", 0.4)]. Stored order
+            = cascade order (cheapest first). Threshold semantics follow
+            the metric's own direction (lower_better respected).
+            Requires the ``iqa`` extra: pip install -e ".[iqa]".
 
     Returns:
         (sources_processed, tiles_scored, tiles_passed) for summary stats.
@@ -144,12 +180,13 @@ def run_ingest(
         io_throttle=io_throttle,
         calibrate=calibrate,
         clipiqa_threshold=clipiqa_threshold,
+        iqa_gates=iqa_gates,
     ) if not dry_run else None
 
     # Tier 3.x accumulators (histogram, threshold audit, outliers).
     # Populated incrementally across the streaming loop.
     if not dry_run:
-        _init_score_csv(scores_csv)
+        _init_score_csv(scores_csv, [g[0] for g in build_gate_list(iqa_gates, clipiqa_threshold)])
     all_raw: list[float] = []
     all_cal: list[float] = []
     all_names: list[str] = []
@@ -273,6 +310,7 @@ def run_ingest(
             calibrate=calibrate,
             clipiqa_threshold=clipiqa_threshold,
             scale_stats=scale_stats,
+            gate_specs=build_gate_list(iqa_gates, clipiqa_threshold),
         )
 
     # Remove the empty stage dir if no per-image subfolders left
@@ -414,11 +452,12 @@ class _ScoringContext:
         "clipiqa_threshold",
         "batch_size",
         "io_throttle",
+        "iqa_gates",
     )
 
     def __init__(self, model, device, use_half, mean, std, threshold,
                  tile_size, calibrate, clipiqa_model=None, clipiqa_threshold=0.0,
-                 batch_size=32, io_throttle=0.0):
+                 batch_size=32, io_throttle=0.0, iqa_gates=None):
         self.model = model
         self.device = device
         self.use_half = use_half
@@ -430,6 +469,16 @@ class _ScoringContext:
         self.writer: BufferedTileWriter | None = None
         self.clipiqa_model = clipiqa_model
         self.clipiqa_threshold = clipiqa_threshold
+        # Perceptual tier: list of dicts (name, model, threshold, lower_better).
+        # Gates run in cascade order; the legacy clipiqa slot auto-registers
+        # as the first gate for backward compatibility.
+        gates = list(iqa_gates or [])
+        if clipiqa_model is not None and clipiqa_threshold and clipiqa_threshold > 0:
+            gates.insert(0, dict(
+                name="clipiqa", model=clipiqa_model,
+                threshold=clipiqa_threshold, lower_better=False,
+            ))
+        self.iqa_gates = gates
         self.batch_size = batch_size
         self.io_throttle = io_throttle
 
@@ -442,6 +491,7 @@ def _build_scoring_context(
     io_throttle: float,
     calibrate: bool,
     clipiqa_threshold: float = 0.0,
+    iqa_gates: list[tuple[str, float]] | None = None,
 ) -> _ScoringContext:
     """Build the ICNet scoring context once for the streaming ingest loop.
 
@@ -489,22 +539,21 @@ def _build_scoring_context(
         mean = mean.half()
         std = std.half()
 
-# Load CLIP-IQA model for artifact filtering (ringing/haloring)
-    clipiqa_model = None
-    if clipiqa_threshold > 0:
-        try:
-            import pyiqa
-            clipiqa_model = pyiqa.create_metric("clipiqa", device=device)
-            logger.info(
-                "CLIP-IQA enabled: threshold=%.2f (removes ringing/haloring)",
-                clipiqa_threshold,
-            )
-        except Exception as exc:
-            logger.warning(
-                "CLIP-IQA unavailable (%s); quality filtering disabled. "
-                "Install with `pip install lucid-sisr[clipiqa]`.", exc
-            )
-            clipiqa_threshold = 0.0
+    # Unified perceptual tier: legacy clipiqa + --iqa-gate list, loaded in
+    # cascade order; each gate skipped with a warning when unavailable.
+    loaded_gates = []
+    for name, thr in build_gate_list(iqa_gates, clipiqa_threshold):
+        res = _load_iqa_metric(name, device)
+        if res is None:
+            continue
+        metric, lower_better = res
+        loaded_gates.append(
+            dict(name=name, model=metric, threshold=thr, lower_better=lower_better)
+        )
+        logger.info(
+            "IQA gate %s: threshold=%s (%s-better)",
+            name, thr, "lower" if lower_better else "higher",
+        )
 
     return _ScoringContext(
         model=model,
@@ -515,27 +564,21 @@ def _build_scoring_context(
         threshold=threshold,
         tile_size=tile_size,
         calibrate=calibrate,
-        clipiqa_model=clipiqa_model,
-        clipiqa_threshold=clipiqa_threshold,
+        iqa_gates=loaded_gates,
         batch_size=batch_size,
         io_throttle=io_throttle,
     )
 
 
-def _init_score_csv(scores_csv: Path) -> None:
+def _init_score_csv(scores_csv: Path, gate_names: list[str]) -> None:
     """Write the header row to the scores CSV. Idempotent — truncates
     the file if it already exists."""
     scores_csv.parent.mkdir(parents=True, exist_ok=True)
     with open(scores_csv, "w", newline="") as csv_f:
         csv.writer(csv_f).writerow(
-            [
-                "tile_name",
-                "complexity_score",
-                "score_calibrated",
-                "calibration_outlier",
-                "source",
-                "source_image",
-            ]
+            ["tile_name", "complexity_score", "score_calibrated",
+             "calibration_outlier", "source", "source_image"]
+            + [f"iqa_{g}" for g in gate_names]
         )
 
 
@@ -575,19 +618,37 @@ def _score_batch(
         return 0, record
 
     # CLIP-IQA scoring: run on the same batch for artifact detection
-    clipiqa_scores = None
-    if ctx.clipiqa_model is not None and ctx.clipiqa_threshold > 0:
-        try:
-            with torch.no_grad():
-                # clipiqa expects [0,1] float tensors, not normalized
-                ciqa_input = stacked.float() / 255.0
-                clipiqa_scores = ctx.clipiqa_model(ciqa_input).flatten().cpu().float().numpy()
-        except Exception as exc:
-            logger.warning("CLIP-IQA scoring failed: %s", exc)
-            clipiqa_scores = None
+    # Perceptual tier: gates run in cascade order on granular-tile inputs;
+    # a tile that fails a gate is masked out of the later (more expensive)
+    # gates' batches.
+    alive = list(range(len(items)))
+    gate_scores: dict[str, list[float]] = {g["name"]: [0.0] * len(items) for g in ctx.iqa_gates}
+    if ctx.iqa_gates and alive:
+        with torch.no_grad():
+            # gates expect [0,1] float tensors, not normalized
+            gate_input = stacked.float() / 255.0
+            for g in ctx.iqa_gates:
+                if not alive:
+                    break
+                sub = gate_input[torch.tensor(alive)]
+                try:
+                    s = g["model"](sub).flatten().cpu().float().numpy()
+                except Exception as exc:
+                    logger.warning("IQA gate %s failed: %s", g["name"], exc)
+                    continue
+                for pos, val in zip(alive, s):
+                    gate_scores[g["name"]][pos] = float(val)
+                    ok = (
+                        float(val) <= g["threshold"]
+                        if g["lower_better"]
+                        else float(val) >= g["threshold"]
+                    )
+                    if not ok:
+                        alive = [a for a in alive if a != pos]
+    all_alive = set(alive)
+    gate_names = list(gate_scores.keys())
 
     tiles_passed = 0
-    tiles_clipped = 0
     with open(scores_csv, "a", newline="") as csv_f:
         writer_csv = csv.writer(csv_f)
         for i, ((t, rgb_arr), sc_raw) in enumerate(zip(items, scores)):
@@ -601,16 +662,9 @@ def _score_batch(
 
             # ICNet gate
             icnet_pass = sc_cal >= ctx.threshold
+            iqa_ok = i in all_alive
 
-            # CLIP-IQA gate (optional)
-            ciqa_pass = True
-            if clipiqa_scores is not None:
-                ciqa_score = float(clipiqa_scores[i])
-                ciqa_pass = ciqa_score >= ctx.clipiqa_threshold
-                if not ciqa_pass:
-                    tiles_clipped += 1
-
-            if icnet_pass and ciqa_pass:
+            if icnet_pass and iqa_ok:
                 if ctx.writer is not None:
                     ctx.writer.write(t.name, rgb_arr)
                 tiles_passed += 1
@@ -623,12 +677,13 @@ def _score_batch(
                     str(t),
                     str(source_image) if source_image else "",
                 ]
+                + [f"{gate_scores[g][i]:.6f}" for g in gate_names]
             )
             record["raw"].append(sc_raw)
             record["cal"].append(sc_cal)
             record["names"].append(t.name)
             record["paths"].append(str(t))
-            record["passed"].append(bool(icnet_pass and ciqa_pass))
+            record["passed"].append(bool(icnet_pass and iqa_ok))
     return tiles_passed, record
 
 
@@ -671,6 +726,7 @@ def _score_staged_tiles(
 
 
 def _write_score_artifacts(
+
     scores_csv: Path,
     scored_dir: Path,
     raw: list[float],
@@ -682,6 +738,7 @@ def _write_score_artifacts(
     calibrate: bool,
     clipiqa_threshold: float = 0.0,
     scale_stats: dict[str, list[int]] | None = None,
+    gate_specs: list[tuple[str, float]] | None = None,
 ) -> None:
     """Tier 3.1 / 3.3 / 3.5: post-run summary artifacts.
 
@@ -759,9 +816,8 @@ def _write_score_artifacts(
             f"calibration_r_squared: {calibration_r_squared(tile_size):.4f}\n"
         )
         f.write(f"calibration_enabled: {calibrate}\n")
-        f.write(
-            f"clipiqa_gate: {'on (>= %.2f)' % clipiqa_threshold if clipiqa_threshold > 0 else 'off'}\n"
-        )
+        for gname, gthr in (gate_specs or []):
+            f.write(f"iqa_gate_{gname}: on (thr={gthr:.4f})\n")
         f.write(f"tiles_scored: {n_total}\n")
         f.write(f"tiles_passing: {n_pass}\n")
         f.write(f"tiles_rejected: {n_rej}\n")

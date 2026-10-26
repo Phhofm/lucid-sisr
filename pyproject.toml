@@ -39,6 +39,7 @@ dependencies = [
 # CLIP-IQA artifact filter (--clipiqa-threshold). Enabled by default when
 # installed; the pipeline logs a warning and skips the stage when missing.
 clipiqa = ["pyiqa>=0.1.10"]
+iqa = ["pyiqa @ git+https://github.com/chaofengc/IQA-PyTorch.git", "transformers>=5.0"]
 # HNSW approximate nearest-neighbour for dedupe (huge speedup + scales to
 # 10M+ tiles). Falls back to brute-force cosine matmul if not installed.
 ann = ["hnswlib>=0.7", "pyiqa>=0.1.10"]

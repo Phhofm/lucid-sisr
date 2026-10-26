@@ -192,6 +192,7 @@ def run_dedupe(
     io_throttle: float = 0.0,
     scores_csv: Path | None = None,
     trim_bottom: int = 0,
+    seed_embeddings: "torch.Tensor | None" = None,
 ) -> tuple[int, int]:
     """Run deduplication on a folder of tiles.
 
@@ -203,6 +204,10 @@ def run_dedupe(
         io_throttle: Seconds to sleep between batches (helps on slow USB drives).
         scores_csv: Ingest scores CSV used by ``trim_bottom``.
         trim_bottom: Drop the lowest-complexity N% of tiles first (0 = off).
+        seed_embeddings: Optional (N, 512) float tensor of prior-corpus
+            embeddings (e.g. the shipped v2 dataset). Tiles whose cosine
+            similarity to a seeded vector exceeds ``threshold`` are treated
+            as pre-existing content and removed from this run.
 
     Note:
         Comparison streams per tile: each tile is matched against all
@@ -237,14 +242,42 @@ def run_dedupe(
         )
 
     hnsw_index: _HNSWIndex | None = None
-    unique_pool = torch.empty((0, FEATURE_DIM), device=device)
+    if seed_embeddings is not None and len(seed_embeddings):
+        seed_n = int(len(seed_embeddings))
+        logger.info("Seeding dedupe pool with %d prior-corpus embeddings", seed_n)
+        if use_hnsw:
+            hnsw_index = _HNSWIndex(
+                max_elements=seed_n + max(2 * len(tile_paths), 100_000)
+            )
+            for row in seed_embeddings:
+                hnsw_index.add(row[None].cpu().numpy().astype(np.float32))
+        else:
+            unique_pool = seed_embeddings.to(device=device, dtype=torch.float32)
+    else:
+        unique_pool = torch.empty((0, FEATURE_DIM), device=device)
     redundant: list[Path] = []
 
-    if use_hnsw:
-        # Oversize by 2x to absorb over-counting from duplicates; cap at 10M.
-        hnsw_index = _HNSWIndex(
-            max_elements=min(max(len(tile_paths) * 2, 100_000), 10_000_000)
+    use_hnsw = _HNSW_AVAILABLE
+    if not use_hnsw:
+        logger.info(
+            "hnswlib not installed; using brute-force cosine matmul. "
+            "Install with `pip install lucid-sisr[ann]` for ~50x faster dedupe "
+            "and scaling beyond ~200k unique tiles."
         )
+
+    hnsw_index: _HNSWIndex | None = None
+    if seed_embeddings is not None and len(seed_embeddings):
+        seed_n = int(len(seed_embeddings))
+        logger.info("Seeding dedupe pool with %d prior-corpus embeddings", seed_n)
+        if use_hnsw:
+            hnsw_index = _HNSWIndex(max_elements=seed_n + max(2 * len(tile_paths), 100_000))
+            for row in seed_embeddings:
+                hnsw_index.add(row[None].cpu().numpy().astype(np.float32))
+        else:
+            unique_pool = seed_embeddings.to(device=device, dtype=torch.float32)
+    else:
+        unique_pool = torch.empty((0, FEATURE_DIM), device=device)
+    redundant: list[Path] = []
 
     processed = 0
     for i in tqdm(range(0, len(tile_paths), batch_size), desc="Auditing diversity"):

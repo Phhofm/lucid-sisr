@@ -51,6 +51,7 @@ def run_pipeline(
     cleanup: bool = False,
     calibrate: bool = True,
     trim_bottom: int = 0,
+    iqa_gates: list[tuple[str, float]] | None = None,
 ) -> dict[str, int]:
     """Run the complete LUCID pipeline or a specific stage.
 
@@ -194,6 +195,7 @@ def run_pipeline(
                 "tile_size": tile_size,
                 "threshold": threshold,
                 "clipiqa_threshold": clipiqa_threshold,
+                "iqa_gates": iqa_gates,
                 "dedupe_threshold": dedupe_threshold,
                 "trim_bottom": trim_bottom,
                 "multiscale": multiscale,
@@ -212,6 +214,7 @@ def run_pipeline(
                     tile_size=tile_size,
                     threshold=threshold,
                     clipiqa_threshold=clipiqa_threshold,
+                    iqa_gates=iqa_gates,
                     model_path=model_path,
                     workers=workers,
                     batch_size=batch_size,
@@ -326,6 +329,7 @@ def run_pipeline(
             "tile_size": tile_size,
             "threshold": threshold,
             "clipiqa_threshold": clipiqa_threshold,
+            "iqa_gates": iqa_gates,
             "dedupe_threshold": dedupe_threshold,
             "trim_bottom": trim_bottom,
             "multiscale": multiscale,

@@ -4,46 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [3.2.0] - 2026-10-21
-
+## [3.4.0] - 2026-10-26
 ### Added
-- **Per-scale pass-rate stats** (`scores/scale_pass_rates.txt`): seen /
-  signal-passed / ICNet-passed per multiscale scale tag, so you can
-  measure whether small scales earn their compute. (First real run:
-  0.25x produced 0 passing tiles on smooth content.)
-- **`run_config.json` manifest** next to `master_lineage.csv`: full gate
-  configuration + counts + lucid version + UTC timestamp.
-
-### Changed
-- **Multiscale resampling unified to Pillow BICUBIC** — the same kernel
-  as the >8192px downscale path (previously a second, more overshooting
-  cv2 bicubic).
-- Dedupe: ResNet-18 features computed in FP16 on CUDA/XPU and tile
-  decoding threaded (8 workers) — throughput; kept-set unchanged.
-
-## [3.1.2] - 2026-10-21
+- **`--iqa-gate METRIC:THRESHOLD`** — opt-in learned perceptual tier on
+  any pyiqa metric (topiq_nr, qrealign-mini/lite/pro, niqe, ...),
+  repeatable, cascade order; direction-aware (lower_better respected).
+  Scores land per-tile in the scores CSV; gates recorded in the
+  threshold audit + run manifest. Motivation: the handcrafted noise
+  proxy is structurally blind to photographic noise (a visibly noisy
+  tile measured noise-ratio 0.39 = the gate's lowest quartile) and the
+  blur floor missed soft-focus content — eye-found defects the
+  learned-KonIQ metric catches decisively (0.155/0.193 vs 0.44-0.77
+  healthy). This is the degradation-floor lever, distinct from the
+  aesthetic-IQA curation the LUCID philosophy rejects.
 
 ### Fixed
-- **EXIF orientation respected**: phone/Flickr photos carry orientation
-  tags; tiles were extracted from the sideways-stored pixel data. GT
-  orientation is now pixel-correct.
-- 16-bit sources (mode `I;16`) now warn — PIL silently collapses them
-  during RGB conversion.
-
-### Added
-- **--resume now refuses changed filtering gates**: resuming with a
-  different `threshold`/`clipiqa`/`multiscale`/etc. than the recorded
-  run aborts instead of silently mixing two gate configurations in one
-  dataset. Gate config is stored in the state DB.
-- GitHub Actions CI: ruff + full test suite on push/PR (CPU torch,
-  Python 3.11/3.12).
-
-### Changed
-- `tests/test_resume.py` is hermetic (was hardcoding an external input
-  folder); suite wall time down from ~70 s to ~44 s.
+- Disk-space guard derived need from a fabricated 25-tiles-per-image
+  multiplier: pre-tiled input folders (e.g. 100_866 x 1 tile) falsely
+  estimated ~2.2 TB with 340 GB free. Now: 2x actual input bytes.
 
 ## [3.3.0] - 2026-10-21
-
 ### Changed
 - **Auto --threshold is a junk floor (0.30), not a quality bar**: the old
   auto-0.45 was a top-half complexity cut that silently dropped half of
@@ -57,8 +37,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   distribution (p1/p5/p50/p99) of the reference folder with a suggested
   `--threshold`, so the floor and shaping can be derived per domain.
 
-## [3.2.1] - 2026-10-21
+## [3.2.2] - 2026-10-21
+### Added
+- **`lucid-calibrate-gates`** — data-driven gate calibration: point it
+  at a trusted GT reference folder; it measures the six signal metrics
+  on tile-size crops, prints the distribution + the ref-keep rate of
+  the current defaults, and derives THRESHOLDS from the 1st/99th
+  percentiles (replacing magic numbers). Verified on PSISRD val125:
+  all six gates keep 100%.
 
+## [3.2.1] - 2026-10-21
 ### Fixed
 - **Signal gates recalibrated on real GT data** (first live PSISRD
   val125 run kept only 10/125 curated tiles):
@@ -78,8 +66,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - PSISRD val125 hr/ rerun: 125/125 signal-passed, 60/125 finalized
   (48% ICNet retention at the 0.45 auto-threshold).
 
-## [3.1.1] - 2026-10-21
+## [3.2.0] - 2026-10-21
+### Added
+- **Per-scale pass-rate stats** (`scores/scale_pass_rates.txt`): seen /
+  signal-passed / ICNet-passed per multiscale scale tag, so you can
+  measure whether small scales earn their compute. (First real run:
+  0.25x produced 0 passing tiles on smooth content.)
+- **`run_config.json` manifest** next to `master_lineage.csv`: full gate
+  configuration + counts + lucid version + UTC timestamp.
 
+### Changed
+- **Multiscale resampling unified to Pillow BICUBIC** — the same kernel
+  as the >8192px downscale path (previously a second, more overshooting
+  cv2 bicubic).
+- Dedupe: ResNet-18 features computed in FP16 on CUDA/XPU and tile
+  decoding threaded (8 workers) — throughput; kept-set unchanged.
+
+## [3.1.2] - 2026-10-21
+### Fixed
+- **EXIF orientation respected**: phone/Flickr photos carry orientation
+  tags; tiles were extracted from the sideways-stored pixel data. GT
+  orientation is now pixel-correct.
+- 16-bit sources (mode `I;16`) now warn — PIL silently collapses them
+  during RGB conversion.
+
+### Added
+- **--resume now refuses changed filtering gates**: resuming with a
+  different `threshold`/`clipiqa`/`multiscale`/etc. than the recorded
+  run aborts instead of silently mixing two gate configurations in one
+  dataset. Gate config is stored in the state DB.
+- GitHub Actions CI: ruff + full test suite on push/PR (CPU torch,
+  Python 3.11/3.12).
+
+### Changed
+- `tests/test_resume.py` is hermetic (was hardcoding an external input
+  folder); suite wall time down from ~70 s to ~44 s.
+
+## [3.1.1] - 2026-10-21
 ### Fixed
 - Dedupe: duplicates processed inside the same batch no longer escape the
   audit; comparisons now stream per tile against everything accepted so far
@@ -105,8 +128,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   tiles at the dedupe stage (BHI finding: removing only the worst tiles beats
   keeping only the best). Trimmed tiles are moved to `scored/redundant/`.
 
-## [3.1.0] - 2026-07-07
-
+## [3.1.0] - 2026-10-21
 ### Fixed
 - CLIP-IQA per-tile score indexing bug: tiles failing ICNet gate now correctly index into CLIP-IQA scores array
 - `--batch` and `--io-throttle-ms` parameters now honored in streaming scoring path
@@ -127,8 +149,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Duplicate `scripts/calibrate_icnet.py` (use packaged copy at `lucid/scripts/`)
 - Standalone `score_and_filter.py` (superseded by `--clipiqa-threshold`)
 
-## [3.0.1] - 2026-06-05
-
+## [3.0.1] - 2026-10-21
 ### Changed
 - `lucid.core.__init__` now lazy-imports `run_dedupe`, `run_ingest`, `run_finalize` (PEP 562). `import lucid.core` no longer requires `torch` to be installed; only attribute access does. This unblocks lightweight test venvs and docs builds.
 - GUI ttk style names hoisted to module-level constants (`STYLE_SUB_LABEL`, `STYLE_SECONDARY_BUTTON`).
@@ -149,8 +170,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `reports/{ruff,mypy,semgrep,sonar}-{baseline,after}.{json,txt,sarif}` — raw output for the sweep.
 - `sonar-project.properties` — local SonarQube 9.9 LTS Community project config.
 
-## [3.0.0] - 2026-06-02
-
+## [3.0.0] - 2026-10-21
 ### Added
 - Unified single-command pipeline: `python -m lucid --input <dir> --output <dir>`
 - Automatic ICNet model download on first run

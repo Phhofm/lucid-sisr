@@ -150,7 +150,8 @@ Tile sizes 128/256/512/1024 ship with a per-size validation curve (R² ≥ 0.94)
 | `--trim-bottom INT` | `0` | Drop lowest-complexity N% at dedupe |
 | `--dedupe-threshold FLOAT` | `0.96` | Cosine similarity dedupe cutoff |
 | `--multiscale` / `--no-multiscale` | **on** | Extra 0.75×/0.5×/0.25× scales |
-| `--clipiqa-threshold FLOAT` | `0.0` (off) | Opt-in perceptual gate (`pip install lucid-sisr[clipiqa]`) |
+| `--clipiqa-threshold FLOAT` | `0.0` (off) | Legacy single perceptual gate; superseded by `--iqa-gate` |
+| `--iqa-gate METRIC:THRESHOLD` | *(off)* | pyiqa perceptual gate, repeatable, cascade order — e.g. `--iqa-gate topiq_nr:0.40 --iqa-gate qrealign-mini:0.4`; direction-aware (niqe-style lower-better metrics respected). Requires `pip install -e ".[iqa]"` |
 | `--icnet PATH` | bundled | ICNet weights |
 | `--no-calibrate` | off | Compare raw ICNet scores |
 | `--workers INT` | `cpu_count - 2` | CPU workers for extraction |

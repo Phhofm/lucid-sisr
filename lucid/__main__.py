@@ -175,6 +175,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Disable CLIP-IQA quality filtering (also the default)",
     )
     parser.add_argument(
+        "--iqa-gate",
+        action="append",
+        default=[],
+        metavar="METRIC:THRESHOLD",
+        help=(
+            "pyiqa perceptual gate; repeatable, runs in given order "
+            "(cheapest first). Any pyiqa metric works, e.g. "
+            "--iqa-gate topiq_nr:0.45 --iqa-gate qrealign-mini:0.4. "
+            "Threshold semantics follow the metric's direction "
+            "(niqe-style lower-better respected). Requires the `iqa` "
+            "extra: pip install -e \".[iqa]\""
+        ),
+    )
+    parser.add_argument(
         "--trim-bottom",
         type=int,
         default=0,
@@ -244,6 +258,13 @@ def main() -> int:
             args.tile_size,
             threshold,
         )
+    gate_specs: list[tuple[str, float]] = []
+    for spec in args.iqa_gate:
+        try:
+            name, thr = spec.rsplit(":", 1)
+            gate_specs.append((name, float(thr)))
+        except ValueError:
+            parser.error(f"--iqa-gate expects METRIC:THRESHOLD, got: {spec}")
 
     if args.dry_run:
         logger.info("=== DRY RUN === No tiles will be written.")
@@ -257,6 +278,8 @@ def main() -> int:
             tile_size=args.tile_size,
             threshold=threshold,
             clipiqa_threshold=args.clipiqa_threshold,
+                        clipiqa_threshold=args.clipiqa_threshold,
+            iqa_gates=gate_specs,
             dedupe_threshold=args.dedupe_threshold,
             trim_bottom=args.trim_bottom,
             batch_size=args.batch,

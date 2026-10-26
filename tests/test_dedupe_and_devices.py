@@ -204,6 +204,37 @@ def test_run_dedupe_flags_duplicates_inside_same_batch(tmp_path):
     assert (tmp_path / "redundant" / "b.png").exists()
 
 
+def test_run_dedupe_seed_pool_flags_preexisting_content(tmp_path):
+    """A tile whose ResNet-18 embedding matches the seeded pool (e.g.
+    v2-corpus content) must be dropped from this run's kept set, even
+    though this run never saw it in its own batches."""
+    import cv2
+    import torch
+    from PIL import Image
+
+    base = _sine_tile(0.5)
+    cv2.imwrite(str(tmp_path / "a.png"), base)
+    cv2.imwrite(str(tmp_path / "b.png"), _sine_tile(1.3))
+
+    fe = dedupe._get_feature_extractor("cpu")
+    prep = dedupe._preload_transform()
+    with Image.open(tmp_path / "a.png") as im:
+        t = prep(im.convert("RGB")).unsqueeze(0)
+    with torch.no_grad():
+        seed = torch.nn.functional.normalize(fe(t).squeeze().float()[None], dim=1)
+
+    kept, removed = dedupe.run_dedupe(
+        input_dir=tmp_path,
+        threshold=0.9999,
+        batch_size=8,
+        device_preference="cpu",
+        seed_embeddings=seed,
+    )
+    assert (kept, removed) == (1, 1)
+    assert (tmp_path / "redundant" / "a.png").exists()
+    assert (tmp_path / "b.png").exists()
+
+
 @pytest.mark.skipif(
     not dedupe.hnswlib_available(),
     reason="hnswlib not installed; skip HNSW-specific tests",
