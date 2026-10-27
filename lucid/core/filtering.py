@@ -24,6 +24,10 @@ from .validation import load_image_as_rgb
 
 logger = logging.getLogger(__name__)
 
+# Perceptual gates run on small sub-batches: 512px tiles x several models
+# (ICNet + up to 4 IQA nets) at the ICNet batch size overflowed 12 GB GPUs.
+_IQA_MAX_BATCH = 8
+
 
 def _compute_scales(h_orig: int, w_orig: int, tile_size: int, multiscale: bool) -> list[float]:
     """Compute scale factors for multi-scale tiling."""
@@ -632,7 +636,13 @@ def _score_batch(
                     break
                 sub = gate_input[torch.tensor(alive)]
                 try:
-                    s = g["model"](sub).flatten().cpu().float().numpy()
+                    parts = []
+                    for k in range(0, len(sub), _IQA_MAX_BATCH):
+                        parts.append(
+                            g["model"](sub[k : k + _IQA_MAX_BATCH])
+                            .flatten().cpu().float().numpy()
+                        )
+                    s = parts[0] if len(parts) == 1 else np.concatenate(parts)
                 except Exception as exc:
                     # Fail closed: an unverified tile must never enter the
                     # dataset. This used to skip the gate and admit the whole

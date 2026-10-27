@@ -126,6 +126,20 @@ def test_iqa_gate_threshold_zero_is_pass_through():
     assert record["passed"] == [True, True]
 
 
+def test_iqa_gate_slices_large_batches():
+    """Gates must run in small sub-batches; a 20-tile batch overflowed
+    VRAM when ICNet and the IQA models shared the GPU."""
+    scores = [0.9] * 20
+    stub = _StubMetric(lambda n: scores[:n])
+    gates = [dict(name="topiq_nr", threshold=0.5, lower_better=False, model=stub)]
+    ctx = _make_ctx(gates)
+    ctx.threshold = -1.0
+    passed, record, _ = _run_batch(ctx, 20)
+    assert passed == 20
+    assert all(n <= 8 for n in stub.calls), stub.calls
+    assert sum(stub.calls) == 20
+
+
 def test_iqa_gate_error_fails_closed():
     """A gate that raises (e.g. CUDA OOM) must NOT pass tiles through
     unverified. Regression: gate exceptions used to skip the gate,
