@@ -11,14 +11,14 @@ def test_suggest_thresholds_key_names_and_directions():
     values = {
         "entropy": [5.0 + i * 0.05 for i in range(100)],  # 5.0..9.95
         "grad_energy": [0.1 + i * 0.1 for i in range(100)],  # 0.1..10.0
-        "noise_ratio": [1.0 + i * 0.01 for i in range(100)],  # 1.0..2.0
+        "clipped": [0.01 + i * 0.01 for i in range(100)],  # 0.01..1.0
     }
     out = suggest_gate_thresholds(values, percentile=97.0)
     # min-gates take the low tail (p3 for percentile=97)
     assert "entropy_min" in out and "grad_energy_min" in out
     assert out["entropy_min"] == 5.1  # round(5.15 / 0.1) * 0.1
     # max-gates take the high tail (p97)
-    assert out["noise_ratio_max"] == 1.95  # round(1.97 / 0.05 = 39.4) = 39 -> 1.95
+    assert out["clipped_max"] == 0.97  # round(0.98 / 0.01) = 98 -> 0.97
 
 
 def test_suggest_thresholds_skips_missing_metrics():
@@ -51,5 +51,5 @@ def test_calibrate_gates_end_to_end(tmp_path, capsys):
     assert "complexity" in out  # ICNet complexity distribution from bundled weights
     assert set(suggested) == {
         "entropy_min", "lap_var_min", "grad_energy_min",
-        "blockiness_max", "noise_ratio_max", "aliasing_max", "clipped_max",
+        "blockiness_max", "aliasing_max", "clipped_max",
     }

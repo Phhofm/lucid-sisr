@@ -91,10 +91,19 @@ Calibrated against curated GT ([PSISRD val125](https://huggingface.co/datasets/P
 | Laplacian variance | 80–10,000 | blur, oversharpening |
 | Gradient energy | ≥ 0.70 | textureless tiles |
 | Blockiness (ratio) | ≤ 1.7 | JPEG compression blocks |
-| Noise ratio | ≤ 1.35 | heavy noise overlays |
 | Aliasing (Hann FFT) | ≤ 0.80 | UI screenshots, stripes, ringing |
+| Clipped pixels | ≤ 40% | blown/crushed frames |
 | ICNet complexity | ≥ 0.30 (junk floor) | tiles below any usable content |
 | Dedupe cosine | ≤ 0.96 | near-duplicate content |
+
+**Recommended perceptual tier** (learned, opt-in — `pip install -e ".[iqa]"`):
+```
+--iqa-gate topiq_nr:0.665 --iqa-gate clipiqa+:0.45 --iqa-gate niqe:6.5 --iqa-gate qrealign-mini:0.78
+```
+Cheap→expensive cascade; each only sees survivors. Thresholds calibrated on
+curated GT (PSISRD val125): topiq p01=0.665, niqe p95=6.65, clipiqa+ keeps 100%,
+qrealign p01=0.77. `niqe` catches photographic grain the handcrafted proxies
+are blind to; `qrealign-mini` catches oversharpening halos.
 
 Complexity **shaping** (how much of the low-complexity tail to expose) is explicit, not a hidden default:
 
@@ -128,7 +137,7 @@ column -s, -t < <output>/lucid_workspace_<input>/scores/ingest_scores.csv | less
 
 ## 6. How it works
 
-**Ingest** — every image is validated (truncated/corrupt files are skipped, `--strict` aborts instead), split into tiles, and filtered by two cheap tiers: six signal metrics (table above, CPU, parallel workers) and ICNet complexity (GPU, FP16 on CUDA/XPU). Images >8192 px are downscaled with Pillow Bicubic — no Lanczos ringing in your GT.
+**Ingest** — every image is validated (truncated/corrupt files are skipped, `--strict` aborts instead), split into tiles, and filtered by two cheap tiers: signal metrics (table above, CPU, parallel workers) and ICNet complexity (GPU, FP16 on CUDA/XPU). Images >8192 px are downscaled with Pillow Bicubic — no Lanczos ringing in your GT.
 
 **Dedupe** — ResNet-18 fingerprints (512-D); each tile streams against everything accepted so far; above-threshold tiles move to `scored/redundant/`. `pip install lucid-sisr[ann]` switches to HNSW for ~10M-tile scale.
 

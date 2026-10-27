@@ -33,7 +33,6 @@ _GATES = {
     "lap_var": ("min", 1.0),
     "grad_energy": ("min", 0.1),
     "blockiness": ("max", 0.05),
-    "noise_ratio": ("max", 0.05),
     "aliasing": ("max", 0.05),
     "clipped": ("max", 0.01),
 }

@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [3.5.0] - 2026-10-27
+
+### Changed
+- **noise_ratio gate removed.** The proxy is structurally blind to
+  photographic noise (a visibly noisy tile measured 0.39 = its lowest
+  quartile). Noise is now gated by learned metrics:
+  `--iqa-gate niqe:6.5` (val125 p95=6.65; noisy example = 11.9) and
+  `topiq_nr:0.665`. Faster extraction as a side effect.
+- **`clipped_ratio` gate added** (pixels on the 0/255 rails; ceiling 40%).
+  Curated GT legitimately clips to 32.5% (snow/sky), so only near-solid
+  blowouts are rejected. Exposed in `lucid-calibrate-gates`.
+
+### Added
+- **`--simple-names`**: final tiles as bare sequential IDs
+  (`00001.png`); provenance stays in `master_lineage.csv`.
+- Recommended perceptual cascade documented in README: topiq_nr 0.665 ->
+  clipiqa+ 0.45 -> niqe 6.5 -> qrealign-mini 0.78.
+
 ## [3.4.0] - 2026-10-26
 ### Added
 - **`--iqa-gate METRIC:THRESHOLD`** — opt-in learned perceptual tier on

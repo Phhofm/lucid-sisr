@@ -28,6 +28,7 @@ def run_finalize(
     move: bool = False,
     dry_run: bool = False,
     dataset_tag: str | None = None,
+    simple_names: bool = False,
 ) -> int:
     """Move or copy scored tiles into final output with sequential naming.
 
@@ -39,6 +40,8 @@ def run_finalize(
         dataset_tag: Source dataset name embedded in final filenames
             (e.g. ``00001_<dataset_tag>.png``). If omitted, recovered
             from the workspace folder name or the original image stem.
+        simple_names: Emit bare sequential names (``00001.png``); source
+            provenance stays in ``master_lineage.csv``.
 
     Returns:
         Number of tiles finalized.
@@ -71,7 +74,9 @@ def run_finalize(
     for p in tqdm(all_pngs, desc="Finalizing"):
         tag = _tag_for_tile(p, fallback_tag)
 
-        new_name = f"{start_index:05d}_{tag}.png"
+        new_name = (
+            f"{start_index:05d}.png" if simple_names else f"{start_index:05d}_{tag}.png"
+        )
         dst = tiles_dir / new_name
 
         if not dry_run:

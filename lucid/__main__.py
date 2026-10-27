@@ -189,6 +189,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--simple-names",
+        action="store_true",
+        help="Final tile names as bare sequential IDs (00001.png); "
+        "source provenance stays in master_lineage.csv",
+    )
+    parser.add_argument(
         "--trim-bottom",
         type=int,
         default=0,
@@ -279,6 +285,7 @@ def main() -> int:
         threshold=threshold,
             clipiqa_threshold=args.clipiqa_threshold,
             iqa_gates=gate_specs,
+            simple_names=args.simple_names,
             dedupe_threshold=args.dedupe_threshold,
             trim_bottom=args.trim_bottom,
             batch_size=args.batch,

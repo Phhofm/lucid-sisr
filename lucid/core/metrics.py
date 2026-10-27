@@ -5,7 +5,6 @@ These metrics assess technical image properties important for SISR training:
 - Laplacian variance: Sharpness/focus (avoid blurry images)
 - Gradient energy: Edge density (ensure texture for learning)
 - Blockiness: Compression artifacts (filter out JPG degradation)
-- Noise ratio: High-frequency noise vs structure (avoid noisy tiles)
 - Aliasing ratio: Oversharpening artifacts (detect haloing)
 - Clipped ratio: Blown highlights / crushed shadows (degenerate frames)
 """
@@ -27,10 +26,9 @@ THRESHOLDS = {
     # / UI patterns / strong ringing land above ~0.80
     "aliasing_max": 0.80,
     "grad_energy_min": 0.70,
-    # hf/gradient proxy, calibrated on curated 512px GT: clean photos
-    # measure 0.32-1.00 (median 0.66); pre-filter for heavy noise
-    # (sigma~25) only — moderate noise is the ICNet/dedupe stages' job
-    "noise_ratio_max": 1.35,
+    # NOTE: noise_ratio proxy removed — structurally blind to photographic
+    # noise (visible noise measured 0.39, its lowest quartile). Noise is
+    # gated by the learned tiers: --iqa-gate niqe:6.5 / topiq_nr:0.665.
     # fraction of pixels at the 0/255 rails; curated reference tops out at
     # 32.5% (snow/sky), so the ceiling only catches near-solid blowouts
     "clipped_max": 0.40,
@@ -60,14 +58,13 @@ def measure_all(gray: np.ndarray) -> tuple[list[float], bool]:
         (metrics_list, passes) where passes is True if the tile meets all thresholds.
     """
     if _is_uniform(gray):
-        return [0.0] * 7, False
+        return [0.0] * 6, False
 
     metrics = [
         float(entropy(gray)),
         float(laplacian_variance(gray)),
         float(gradient_energy(gray)),
         float(blockiness(gray)),
-        float(noise_ratio(gray)),
         float(aliasing_ratio(gray)),
         float(clipped_ratio(gray)),
     ]
@@ -80,11 +77,9 @@ def measure_all(gray: np.ndarray) -> tuple[list[float], bool]:
         return metrics, False
     if metrics[3] > THRESHOLDS["blockiness_max"]:
         return metrics, False
-    if metrics[4] > THRESHOLDS["noise_ratio_max"]:
+    if metrics[4] > THRESHOLDS["aliasing_max"]:
         return metrics, False
-    if metrics[5] > THRESHOLDS["aliasing_max"]:
-        return metrics, False
-    if metrics[6] > THRESHOLDS["clipped_max"]:
+    if metrics[5] > THRESHOLDS["clipped_max"]:
         return metrics, False
 
     return metrics, True
@@ -198,26 +193,3 @@ def gradient_energy(gray: np.ndarray) -> float:
     gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3) / 8.0
     gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3) / 8.0
     return float(np.mean(cv2.sqrt(gx**2 + gy**2)))
-
-
-def noise_ratio(gray: np.ndarray) -> float:
-    """Calculate noise-to-gradient ratio.
-
-    High values indicate high-frequency noise dominates structural gradients,
-    suggesting noisy images that confuse SR training.
-
-    Args:
-        gray: Grayscale image as numpy array.
-
-    Returns:
-        Ratio of high-frequency energy to gradient energy (lower is better).
-    """
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-    hf = gray.astype(np.float32) - blur.astype(np.float32)
-    hf_energy = np.mean(hf**2)
-
-    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3) / 8.0
-    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3) / 8.0
-    grad_energy = np.mean(gx**2 + gy**2)
-
-    return float(hf_energy / (grad_energy + 1e-9))
