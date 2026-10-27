@@ -177,7 +177,6 @@ def test_clipped_ratio_rejects_blown_frame():
     """Near-solid blown/black frames must be caught by the clipping gate;
     normal photos (even high-key ones) must pass. val125 reference tops
     out at 32.5% clipped pixels, so the ceiling is lenient by design."""
-    from lucid.core.metrics import clipped_ratio
 
     blown = np.full((512, 512), 255, np.uint8)
     assert clipped_ratio(blown) > THRESHOLDS["clipped_max"]
