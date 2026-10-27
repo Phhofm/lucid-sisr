@@ -6,6 +6,7 @@ from lucid.core.metrics import (
     THRESHOLDS,
     aliasing_ratio,
     blockiness,
+    clipped_ratio,
     measure_all,
     noise_ratio,
 )
@@ -29,7 +30,7 @@ def test_uniform_tile_fails():
     gray = np.zeros((512, 512), dtype=np.uint8)
     metrics, passes = measure_all(gray)
     assert not passes, "Uniform tile should fail"
-    assert len(metrics) == 6
+    assert len(metrics) == 7
 
 
 def test_random_tile_produces_six_metrics():
@@ -37,7 +38,7 @@ def test_random_tile_produces_six_metrics():
     np.random.seed(42)
     gray = np.random.randint(0, 255, (512, 512), dtype=np.uint8)
     metrics, passes = measure_all(gray)
-    assert len(metrics) == 6
+    assert len(metrics) == 7
     # Random noise typically fails noise_ratio or aliasing checks, so we
     # do not assert passes here — the key invariant is the metric count.
 
@@ -54,7 +55,7 @@ def test_gradient_tile_passes():
     tile = (base + 128).clip(0, 255).astype(np.uint8)
     gray = np.tile(tile, (2, 2))  # tile to 512x512 for consistency
     metrics, passes = measure_all(gray)
-    assert len(metrics) == 6
+    assert len(metrics) == 7
     assert passes, "Textured tile should pass all signal filters"
 
 
@@ -170,6 +171,24 @@ def test_noise_ratio_heavy_noise_rejected_clean_kept():
     ).astype(np.uint8)
     assert noise_ratio(nat) < THRESHOLDS["noise_ratio_max"]
     assert noise_ratio(noisy) > THRESHOLDS["noise_ratio_max"]
+
+
+def test_clipped_ratio_rejects_blown_frame():
+    """Near-solid blown/black frames must be caught by the clipping gate;
+    normal photos (even high-key ones) must pass. val125 reference tops
+    out at 32.5% clipped pixels, so the ceiling is lenient by design."""
+    from lucid.core.metrics import clipped_ratio
+
+    blown = np.full((512, 512), 255, np.uint8)
+    assert clipped_ratio(blown) > THRESHOLDS["clipped_max"]
+
+    nat = _natural_image()
+    assert clipped_ratio(nat) < THRESHOLDS["clipped_max"]
+
+    # a high-key photo with 20% clipped pixels is legitimate GT
+    hk = nat.copy()
+    hk[: int(512 * 0.45), : int(512 * 0.45)] = 255  # ~20% blown corner
+    assert clipped_ratio(hk) < THRESHOLDS["clipped_max"]
 
 
 def test_thresholds_exist():

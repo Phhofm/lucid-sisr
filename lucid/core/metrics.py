@@ -7,6 +7,7 @@ These metrics assess technical image properties important for SISR training:
 - Blockiness: Compression artifacts (filter out JPG degradation)
 - Noise ratio: High-frequency noise vs structure (avoid noisy tiles)
 - Aliasing ratio: Oversharpening artifacts (detect haloing)
+- Clipped ratio: Blown highlights / crushed shadows (degenerate frames)
 """
 
 import cv2
@@ -30,12 +31,26 @@ THRESHOLDS = {
     # measure 0.32-1.00 (median 0.66); pre-filter for heavy noise
     # (sigma~25) only — moderate noise is the ICNet/dedupe stages' job
     "noise_ratio_max": 1.35,
+    # fraction of pixels at the 0/255 rails; curated reference tops out at
+    # 32.5% (snow/sky), so the ceiling only catches near-solid blowouts
+    "clipped_max": 0.40,
 }
 
 
 def _is_uniform(gray: np.ndarray) -> bool:
     """Quick check for completely uniform (single-value) tiles."""
     return np.unique(gray).size <= 1
+
+
+def clipped_ratio(gray: np.ndarray) -> float:
+    """Fraction of pixels sitting on the 0/255 rails.
+
+    Near-solid blown or black frames carry no recoverable signal for SR
+    training. Curated GT legitimately clips up to ~32% (snow, sky), so only
+    degenerate frames exceed the ceiling.
+    """
+    g = np.asarray(gray)
+    return float(np.mean((g <= 2) | (g >= 253)))
 
 
 def measure_all(gray: np.ndarray) -> tuple[list[float], bool]:
@@ -45,7 +60,7 @@ def measure_all(gray: np.ndarray) -> tuple[list[float], bool]:
         (metrics_list, passes) where passes is True if the tile meets all thresholds.
     """
     if _is_uniform(gray):
-        return [0.0] * 6, False
+        return [0.0] * 7, False
 
     metrics = [
         float(entropy(gray)),
@@ -54,6 +69,7 @@ def measure_all(gray: np.ndarray) -> tuple[list[float], bool]:
         float(blockiness(gray)),
         float(noise_ratio(gray)),
         float(aliasing_ratio(gray)),
+        float(clipped_ratio(gray)),
     ]
 
     if metrics[0] < THRESHOLDS["entropy_min"]:
@@ -67,6 +83,8 @@ def measure_all(gray: np.ndarray) -> tuple[list[float], bool]:
     if metrics[4] > THRESHOLDS["noise_ratio_max"]:
         return metrics, False
     if metrics[5] > THRESHOLDS["aliasing_max"]:
+        return metrics, False
+    if metrics[6] > THRESHOLDS["clipped_max"]:
         return metrics, False
 
     return metrics, True

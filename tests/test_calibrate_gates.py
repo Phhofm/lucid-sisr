@@ -51,5 +51,5 @@ def test_calibrate_gates_end_to_end(tmp_path, capsys):
     assert "complexity" in out  # ICNet complexity distribution from bundled weights
     assert set(suggested) == {
         "entropy_min", "lap_var_min", "grad_energy_min",
-        "blockiness_max", "noise_ratio_max", "aliasing_max",
+        "blockiness_max", "noise_ratio_max", "aliasing_max", "clipped_max",
     }

@@ -35,6 +35,7 @@ _GATES = {
     "blockiness": ("max", 0.05),
     "noise_ratio": ("max", 0.05),
     "aliasing": ("max", 0.05),
+    "clipped": ("max", 0.01),
 }
 
 _CROPS_PER_IMAGE = 8
