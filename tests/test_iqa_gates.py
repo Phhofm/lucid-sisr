@@ -126,6 +126,25 @@ def test_iqa_gate_threshold_zero_is_pass_through():
     assert record["passed"] == [True, True]
 
 
+def test_iqa_gate_error_fails_closed():
+    """A gate that raises (e.g. CUDA OOM) must NOT pass tiles through
+    unverified. Regression: gate exceptions used to skip the gate,
+    silently admitting noisy tiles into the dataset."""
+
+    class _Boom:
+        lower_better = False
+
+        def __call__(self, x):
+            raise RuntimeError("CUDA out of memory")
+
+    gates = [dict(name="topiq_nr", threshold=0.665, lower_better=False, model=_Boom())]
+    ctx = _make_ctx(gates)
+    ctx.threshold = -1.0
+    passed, record, _ = _run_batch(ctx, 3)
+    assert passed == 0
+    assert record["passed"] == [False, False, False]
+
+
 def test_gate_list_builder_merges_clipiqa_legacy():
     from lucid.core.filtering import build_gate_list
     gates = build_gate_list(iqa_gates=[("niqe", 5.0)], clipiqa_threshold=0.3)

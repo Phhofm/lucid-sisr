@@ -634,8 +634,15 @@ def _score_batch(
                 try:
                     s = g["model"](sub).flatten().cpu().float().numpy()
                 except Exception as exc:
-                    logger.warning("IQA gate %s failed: %s", g["name"], exc)
-                    continue
+                    # Fail closed: an unverified tile must never enter the
+                    # dataset. This used to skip the gate and admit the whole
+                    # batch unverified (e.g. after CUDA OOM).
+                    logger.warning(
+                        "IQA gate %s failed (%s); rejecting %d unverified tiles",
+                        g["name"], exc, len(alive),
+                    )
+                    alive = []
+                    break
                 for pos, val in zip(alive, s):
                     gate_scores[g["name"]][pos] = float(val)
                     ok = (
