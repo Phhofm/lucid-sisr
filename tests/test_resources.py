@@ -57,6 +57,7 @@ def test_disk_guard_uses_real_input_bytes(tmp_path, monkeypatch):
 
 def test_load_seed_pool(tmp_path):
     import numpy as np
+
     from lucid.pipeline import _load_seed_pool
 
     p = tmp_path / "pool.npy"
