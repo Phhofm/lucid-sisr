@@ -53,3 +53,13 @@ def test_disk_guard_uses_real_input_bytes(tmp_path, monkeypatch):
             cleanup=False,
         )
     assert len(free_calls) == 1
+
+
+def test_load_seed_pool(tmp_path):
+    import numpy as np
+    from lucid.pipeline import _load_seed_pool
+
+    p = tmp_path / "pool.npy"
+    np.save(p, np.random.default_rng(0).random((5, 512)).astype(np.float32))
+    t = _load_seed_pool(p)
+    assert tuple(t.shape) == (5, 512)

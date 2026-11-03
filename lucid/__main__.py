@@ -189,6 +189,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--seed-pool",
+        type=Path,
+        default=None,
+        help=".npy of (N,512) embeddings from a previous dataset generation; "
+        "tiles similar to that pool are excluded at the dedupe stage "
+        "(keeps dataset generations source-disjoint in content)",
+    )
+    parser.add_argument(
         "--simple-names",
         action="store_true",
         help="Final tile names as bare sequential IDs (00001.png); "
@@ -286,6 +294,7 @@ def main() -> int:
             clipiqa_threshold=args.clipiqa_threshold,
             iqa_gates=gate_specs,
             simple_names=args.simple_names,
+            seed_pool=args.seed_pool,
             dedupe_threshold=args.dedupe_threshold,
             trim_bottom=args.trim_bottom,
             batch_size=args.batch,

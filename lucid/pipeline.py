@@ -24,6 +24,15 @@ logger = logging.getLogger(__name__)
 
 PNG_GLOB = "*.png"
 
+
+def _load_seed_pool(path: Path):
+    """Load a precomputed embedding pool (N, 512) used to exclude tiles
+    from a previous dataset generation."""
+    import numpy as np
+    import torch
+
+    return torch.from_numpy(np.load(path)).float()
+
 # Auto --threshold floor: below ~0.30 calibrated complexity a tile is
 # junk (flat/sky/defocus) in every domain tested; above it, selection
 # semantics are the user's call (complexity, not artifact-free-ness).
@@ -53,6 +62,7 @@ def run_pipeline(
     trim_bottom: int = 0,
     iqa_gates: list[tuple[str, float]] | None = None,
     simple_names: bool = False,
+    seed_pool: Path | None = None,
 ) -> dict[str, int]:
     """Run the complete LUCID pipeline or a specific stage.
 
@@ -198,6 +208,7 @@ def run_pipeline(
                 "clipiqa_threshold": clipiqa_threshold,
                 "iqa_gates": iqa_gates,
                 "simple_names": simple_names,
+                "seed_pool": str(seed_pool) if seed_pool else None,
                 "dedupe_threshold": dedupe_threshold,
                 "trim_bottom": trim_bottom,
                 "multiscale": multiscale,
@@ -270,6 +281,7 @@ def run_pipeline(
                 # Backward compat: older workspaces may have tiles in raw_tiles
                 tile_input = workspace / "raw_tiles"
             if tile_input.exists():
+                seed_emb = _load_seed_pool(seed_pool) if seed_pool else None
                 kept, removed = dedupe.run_dedupe(
                     input_dir=tile_input,
                     threshold=dedupe_threshold,
@@ -277,6 +289,7 @@ def run_pipeline(
                     io_throttle=io_throttle_sec,
                     scores_csv=workspace / "scores" / "ingest_scores.csv",
                     trim_bottom=trim_bottom,
+                    seed_embeddings=seed_emb,
                 )
                 stats["tiles_kept"] = kept
                 logger.info("Dedupe: kept %d, removed %d", kept, removed)
@@ -334,6 +347,7 @@ def run_pipeline(
             "clipiqa_threshold": clipiqa_threshold,
             "iqa_gates": iqa_gates,
             "simple_names": simple_names,
+            "seed_pool": str(seed_pool) if seed_pool else None,
             "dedupe_threshold": dedupe_threshold,
             "trim_bottom": trim_bottom,
             "multiscale": multiscale,
