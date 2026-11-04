@@ -1,5 +1,8 @@
 # LUCID - Agent Development Guide
 
+**Project state / operational context:** see [`docs/LUCID_STATUS.md`](docs/LUCID_STATUS.md)
+(current datasets, running jobs, thresholds, resume commands).
+
 ## Architecture Overview (v3.0)
 
 LUCID is a unified pipeline for SISR dataset filtering. It runs as a **single CLI command**:
