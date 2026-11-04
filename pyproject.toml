@@ -79,6 +79,7 @@ lucid = ["resources/*.json", "resources/*.pth"]
 
 [tool.ruff]
 line-length = 100
+exclude = ["scripts/ops"]  # operational build scripts, not package code
 target-version = "py310"
 
 [tool.ruff.lint]
